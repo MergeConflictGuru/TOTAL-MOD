@@ -70,6 +70,16 @@ namespace GOTHIC_ENGINE {
 
     HOOK Orig_oCNpcDoTakeVob PATCH(&oCNpc::DoTakeVob, &oCNpc::DoTakeVob_Hook);
 
+
+#define PATS \
+    X("ITPL_\0") X("ITMI_GOLD") X("ITLS_TORCH") X("ITRW_ARROW") X("ITRW_BOLT")
+#define X(s) s,
+    constexpr const char* patterns[] = { PATS };
+#undef X
+#define X(s) (sizeof(s) - 1),
+    constexpr size_t pattern_lens[] = { PATS };
+#undef X
+
     int oCNpc::DoTakeVob_Hook(zCVob* vob) {
         bool isPlayer = (this == ogame->GetSelfPlayerVob());
 
@@ -81,14 +91,18 @@ namespace GOTHIC_ENGINE {
         auto took = THISCALL(Orig_oCNpcDoTakeVob)(vob);
 
         if (isPlayer && took) {
-            static constexpr auto RANGE = 500.0f;
+            static constexpr auto BASE_RANGE = 500.0f;
+            bool grab_all = zinput->KeyPressed(KEY_LSHIFT);
+            float range = BASE_RANGE;
+            if (grab_all) range *= 2;
+
             zTBBox3D bbox;
-            bbox.mins[0] = wp[0] - RANGE;
-            bbox.mins[1] = wp[1] - RANGE;
-            bbox.mins[2] = wp[2] - RANGE;
-            bbox.maxs[0] = wp[0] + RANGE;
-            bbox.maxs[1] = wp[1] + RANGE;
-            bbox.maxs[2] = wp[2] + RANGE;
+            bbox.mins[0] = wp[0] - range;
+            bbox.mins[1] = wp[1] - range;
+            bbox.mins[2] = wp[2] - range;
+            bbox.maxs[0] = wp[0] + range;
+            bbox.maxs[1] = wp[1] + range;
+            bbox.maxs[2] = wp[2] + range;
             zCArray<zCVob*> surrounding;
             homeWorld->bspTree.bspRoot->CollectVobsInBBox3D(surrounding, bbox);
             for (int i = 0; i < surrounding.GetNum(); ++i) {
@@ -96,21 +110,22 @@ namespace GOTHIC_ENGINE {
                 if (otherVob == vob) continue; // skip self
                 if (otherVob->_GetClassDef() != oCItem::classDef) // only items
                     continue;
-                if (otherVob->GetPositionWorld().Distance(wp) > RANGE)
+                if (otherVob->GetPositionWorld().Distance(wp) > range)
                     continue;
                 auto* otherItem = static_cast<oCItem*>(otherVob);
                 auto vobId = vob->GetObjectName();
                 auto otherId = otherItem->GetObjectName();
 
-                // plant collection, arrows, bolts, etc.
-                constexpr char* patterms[] = { "ITPL_", "ITMI_GOLD", "ITLS_TORCH", "ITRW_ARROW", "ITRW_BOLT" };
-                for (const char* pat : patterms) {
-                    auto patlen = strlen(pat);
-                    if (strncmp(vobId.ToChar(), pat, patlen) == 0 && strncmp(otherId.ToChar(), pat, patlen) == 0) {
-                        DoPutInInventory(otherItem);
-                        break; // only one match is needed
+                bool grab_this = grab_all;
+                if (!grab_all) {
+                    for (auto i = 0; i < _countof(patterns); ++i) {
+                        if (strncmp(vobId.ToChar(), patterns[i], pattern_lens[i]) == 0 && strncmp(otherId.ToChar(), patterns[i], pattern_lens[i]) == 0) {
+                            grab_this = true;
+                            break; // only one match is needed
+                        }
                     }
                 }
+                if (grab_this) DoPutInInventory(otherItem);
             }
         }
         return took;
