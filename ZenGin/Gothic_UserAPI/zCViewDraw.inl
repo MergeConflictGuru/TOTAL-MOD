@@ -3,3 +3,4 @@
 // User API for zCViewDraw
 // Add your methods here
 
+void __fastcall Draw_Hook();

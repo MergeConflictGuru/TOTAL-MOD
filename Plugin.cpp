@@ -80,54 +80,194 @@ namespace GOTHIC_ENGINE {
     constexpr size_t pattern_lens[] = { PATS };
 #undef X
 
+    enum NPC_MOVE_RESULT {
+        MOVE_SUCCESS = 0,  // Path is clear
+        MOVE_STEP_DOWN = 1,  // Shallow drop (safe to step down)
+        MOVE_OBSTACLE = 2,  // Blocked by wall/object
+        MOVE_JUMP_LEDGE = 3,  // Ledge requires jump
+        MOVE_CHASM = 4,  // Deep chasm (fall hazard)
+        MOVE_JUMP_CHASM = 9   // Chasm can be jumped over
+    };
+
+    zCArray<oCItem*> scanItems(zCVob* root, float range) {
+        zCArray<oCItem*> surrounding;
+        if (!root || !root->homeWorld) {
+            return surrounding; // no items if no root or world
+		}
+
+        auto wp = root->GetPositionWorld();
+        zTBBox3D bbox;
+        bbox.mins = wp - range;
+        bbox.maxs = wp + range;
+
+        root->homeWorld->bspTree.bspRoot->CollectVobsInBBox3D(reinterpret_cast<zCArray<zCVob*>&>(surrounding), bbox);
+        for (int i = surrounding.GetNum() - 1; i >= 0; --i) {
+            auto otherVob = surrounding[i];
+            if (otherVob->_GetClassDef() == oCItem::classDef) // only items
+            {
+                auto otherWp = otherVob->GetPositionWorld();
+                if (otherWp.Distance(wp) <= range) {
+                    continue;
+                }
+            }
+            surrounding.RemoveIndex(i);
+        }
+        return surrounding;
+    }
+
+    void filterReachableItems(zCArray<oCItem*>& items, float range, bool debug) {
+        auto world = ogame->GetGameWorld();
+        zVEC3 playerPos = player->bbox3D.GetCenter();
+        playerPos[1] = player->bbox3D.maxs[1];
+        const float radius = range / 5;  // Search radius around player
+        constexpr int numPoints = 13;      // Number of points to check around player
+        const int flags = zTRACERAY_VOB_IGNORE_NO_CD_DYN | zTRACERAY_VOB_IGNORE_CHARACTER | zTRACERAY_POLY_IGNORE_TRANSP;
+        static constexpr float TWOPI = 2.0f * 3.141592653589793238462643383279502884f;
+
+        zCArray<zCVob*> ignore;
+        ignore.AllocAbs(items.GetNum());
+        std::memcpy(ignore.GetArray(), items.GetArray(), items.GetNum() * sizeof(decltype(items[0])));
+        ignore.InsertEnd(player);
+
+        auto hasClearLineOfSight = [&](const zVEC3& src, const zVEC3& dst) -> bool {
+            auto rv = world->TraceRayFirstHit(src, dst - src, &ignore, flags);
+            if (debug) zlineCache->Line3D(src, dst, rv ? zCOLOR(255, 0, 0) : zCOLOR(0, 255, 0), 0);
+            return !rv;
+            };
+
+        zVEC3 testPoints[numPoints];
+		bool hasTestPoints = false;
+
+        for (int i = items.GetNum() - 1; i >= 0; --i) {
+            auto* item = items[i];
+
+            // Compute the average bbox radius for the item
+            zVEC3 bboxCenter = item->bbox3D.GetCenter();
+            zVEC3 r = (item->bbox3D.maxs - item->bbox3D.mins) * 0.5f;
+            float avgRadius = (r[0] + r[1] + r[2]) / 3.0f;
+
+            // Direction from X to item
+            zVEC3 itemSurfaceFacingPlayer = bboxCenter - (bboxCenter - playerPos).Normalize() * avgRadius;
+
+            bool clearView = false;
+
+            if (hasClearLineOfSight(playerPos, itemSurfaceFacingPlayer)) {
+                clearView = true;
+            }
+            else {
+                // Generate points around player in a circle
+                if (!hasTestPoints) {
+					hasTestPoints = true;
+                    auto baseAngle = player->trafoObjToWorld.GetAtVector().GetAngleXZ();
+                    for (int i = 0; i < numPoints; i++) {
+                        float angle = TWOPI * i / numPoints;
+                        float dy = cosf((angle + TWOPI * 0.25f) * 17) * radius / 3;
+                        zVEC3 offset(cosf(angle - baseAngle) * radius, dy, sinf(angle - baseAngle) * radius);
+                        testPoints[i] = playerPos + offset;
+                    }
+                }
+
+                // Check visibility from each test point
+                for (auto& testPoint : testPoints) {
+                    if (!hasClearLineOfSight(playerPos, testPoint)) continue;
+                    zVEC3 itemSurfaceFacingPoint = bboxCenter - (bboxCenter - testPoint).Normalize() * avgRadius;
+                    if (!hasClearLineOfSight(testPoint, itemSurfaceFacingPoint)) continue;
+                    clearView = true;
+                }
+            }
+
+            if (!clearView) {
+                items.RemoveIndex(i);
+            }
+        }
+    }
+
+    bool debugRays = false;
+
+    void showLootRays() {
+        static constexpr auto BASE_RANGE = 500.0f;
+        bool grab_all = zinput->KeyPressed(KEY_LSHIFT);
+        float range = BASE_RANGE;
+        if (grab_all) range *= 2;
+        auto gimme = scanItems(player, range);
+		filterReachableItems(gimme, range, true);
+    }
+
     int oCNpc::DoTakeVob_Hook(zCVob* vob) {
         bool isPlayer = (this == ogame->GetSelfPlayerVob());
 
-        zVEC3 wp;
-        if (isPlayer && vob) {
-            wp = vob->GetPositionWorld();
-        }
+        if (!isPlayer) return THISCALL(Orig_oCNpcDoTakeVob)(vob);
 
+        static constexpr auto BASE_RANGE = 500.0f;
+        bool grab_all = zinput->KeyPressed(KEY_LSHIFT);
+        float range = BASE_RANGE;
+        if (grab_all) range *= 2;
+        auto gimme = scanItems(vob, range);
         auto took = THISCALL(Orig_oCNpcDoTakeVob)(vob);
+		if (!took) return 0; // no item taken, exit early
 
-        if (isPlayer && took) {
-            static constexpr auto BASE_RANGE = 500.0f;
-            bool grab_all = zinput->KeyPressed(KEY_LSHIFT);
-            float range = BASE_RANGE;
-            if (grab_all) range *= 2;
+        auto &vobId = vob->GetObjectName();
+        for (int i = gimme.GetNum() - 1; i >= 0; --i) {
+			auto otherItem = gimme[i];
+            auto &otherId = otherItem->GetObjectName();
 
-            zTBBox3D bbox;
-            bbox.mins[0] = wp[0] - range;
-            bbox.mins[1] = wp[1] - range;
-            bbox.mins[2] = wp[2] - range;
-            bbox.maxs[0] = wp[0] + range;
-            bbox.maxs[1] = wp[1] + range;
-            bbox.maxs[2] = wp[2] + range;
-            zCArray<zCVob*> surrounding;
-            homeWorld->bspTree.bspRoot->CollectVobsInBBox3D(surrounding, bbox);
-            for (int i = 0; i < surrounding.GetNum(); ++i) {
-                auto otherVob = surrounding[i];
-                if (otherVob == vob) continue; // skip self
-                if (otherVob->_GetClassDef() != oCItem::classDef) // only items
-                    continue;
-                if (otherVob->GetPositionWorld().Distance(wp) > range)
-                    continue;
-                auto* otherItem = static_cast<oCItem*>(otherVob);
-                auto vobId = vob->GetObjectName();
-                auto otherId = otherItem->GetObjectName();
-
-                bool grab_this = grab_all;
-                if (!grab_all) {
-                    for (auto i = 0; i < _countof(patterns); ++i) {
-                        if (strncmp(vobId.ToChar(), patterns[i], pattern_lens[i]) == 0 && strncmp(otherId.ToChar(), patterns[i], pattern_lens[i]) == 0) {
-                            grab_this = true;
-                            break; // only one match is needed
-                        }
+            bool grab_this = grab_all;
+            if (!grab_all) {
+                for (auto i = 0; i < _countof(patterns); ++i) {
+                    if (strncmp(vobId.ToChar(), patterns[i], pattern_lens[i]) == 0 && strncmp(otherId.ToChar(), patterns[i], pattern_lens[i]) == 0) {
+                        grab_this = true;
+                        break; // only one match is needed
                     }
                 }
-                if (grab_this) DoPutInInventory(otherItem);
+            }
+            if (otherItem == vob) grab_this = false;
+			if (!grab_this) gimme.RemoveIndex(i);
+		}
+
+		filterReachableItems(gimme, range, false);
+
+        for (int i = gimme.GetNum() - 1; i >= 0; --i) {
+            auto item = gimme[i];
+			DoPutInInventory(item);
+		}
+
+        /*
+        // Create a copy of items to avoid modifying original
+        std::vector<oCItem*> items_to_visit = std::move(gimme);
+        zVEC3 current_pos = player->GetPositionWorld();
+        std::vector<oCItem*> optimized_path;
+
+        while (!items_to_visit.empty()) {
+            // Find closest item to current position
+            float min_dist = FLT_MAX;
+            oCItem* closest_item = nullptr;
+            size_t closest_index = 0;
+
+            for (size_t i = 0; i < items_to_visit.size(); i++) {
+                float dist = items_to_visit[i]->GetPositionWorld().Distance(current_pos);
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    closest_item = items_to_visit[i];
+                    closest_index = i;
+                }
+            }
+
+            // Add to optimized path and update current position
+            if (closest_item) {
+                optimized_path.push_back(closest_item);
+                current_pos = closest_item->GetPositionWorld();
+                items_to_visit.erase(items_to_visit.begin() + closest_index);
             }
         }
+
+        // Execute movement along optimized path
+        for (auto& item : optimized_path) {
+            oCMsgMovement* go = new oCMsgMovement(oCMsgMovement::EV_GOTOVOB, item);
+            player->GetEM()->OnMessage(go, player);
+            oCMsgManipulate* take = new oCMsgManipulate(oCMsgManipulate::EV_TAKEVOB, item);
+            player->GetEM()->OnMessage(take, player);
+        }
+        */
         return took;
     }
 
@@ -239,6 +379,116 @@ namespace GOTHIC_ENGINE {
         return THISCALL(ORIG_oCNpcInventory_HandleEvent)(key);
     }
 
+
+    /*
+        JOURNEY LOG
+    */
+
+    std::vector<zVEC3> journeyLog;
+    zSTRING journeyWorld;
+
+    void markJourney() {
+        auto player = ogame->GetSelfPlayerVob();
+        auto wld = ogame->GetGameWorld();
+        if (!player || !wld)
+            return;
+        auto worldFile = wld->GetWorldFilename();
+        if (journeyWorld != worldFile) {
+            journeyLog.clear();
+            journeyWorld = worldFile;
+        }
+        static constexpr size_t YEAR = 365 * 24 * 60;
+        if (journeyLog.size() >= YEAR) journeyLog.clear();
+        journeyLog.push_back(player->GetPositionWorld());
+    }
+
+    auto worldToMap(const zVEC3& wp, oCViewDocumentMap* map) {
+        zCViewObject* mapObj = map->ViewArrow.ViewParent;
+        auto mapX = mapObj->PixelPosition.X;
+        auto mapY = mapObj->PixelPosition.Y;
+        auto mapW = mapObj->PixelSize.X;
+        auto mapH = mapObj->PixelSize.Y;
+        auto worldMinX = map->LevelCoords[0]; // dword214
+        auto worldMinZ = map->LevelCoords[1];    // dword214
+        auto worldMaxX = map->LevelCoords[2];    // dword218
+        auto worldMaxZ = map->LevelCoords[3];    // dword21C
+        auto worldW = worldMaxX - worldMinX;
+        auto worldH = worldMaxZ - worldMinZ;
+        float invW = worldW ? 1.0f / worldW : 0.0f;
+        float invH = worldH ? 1.0f / worldH : 0.0f;
+        float nx = (wp[0] - worldMinX) * invW;
+        float nz = (wp[2] - worldMinZ) * invH;
+        return std::make_pair(nx, nz);
+    }
+
+    class Journey {
+        zCPositionKey* keyArr = nullptr;
+        zCArray<zCPositionKey*>  keys;
+        zCKBSpline               spline;
+        zCOLOR                   color;
+        float                     thickness;
+
+    public:
+        // Constructor: configure color and thickness
+        Journey(oCViewDocumentMap* map,
+            zCOLOR drawColor = zCOLOR(255, 0, 0),
+            float drawThickness = 2.0f)
+            : color(drawColor), thickness(drawThickness)
+        {
+            size_t N = journeyLog.size();
+            if (N < 4 || !map) return;
+
+            keys.AllocAbs(N);
+            keyArr = new zCPositionKey[N];
+            for (size_t i = 0; i < N; ++i) {
+                float nx, nz;
+                std::tie(nx, nz) = worldToMap(journeyLog[i], map);
+
+                auto& k = keyArr[i];
+                k.t = float(i) / float(N - 1);
+                k.p = zVEC3(nx, nz, 0.0f);
+                k.tension = 0.0f;
+                k.continuity = 0.0f;
+                k.bias = 0.0f;
+
+                keys.InsertEnd(&k);
+            }
+
+            spline.InitVars();
+            spline.Initialize(keys, 1);
+            spline.ComputeArcLength();
+        }
+
+        // Draw with configured color & thickness
+        void draw() {
+            spline.Draw(color, thickness);
+        }
+
+        // Destructor: cleanup
+        ~Journey() {
+            spline.Terminate();
+            delete[] keyArr;
+            keys.DeleteList();
+        }
+
+        // Disable copy & move
+        Journey(const Journey&) = delete;
+        Journey& operator=(const Journey&) = delete;
+        Journey(Journey&&) = delete;
+        Journey& operator=(Journey&&) = delete;
+    };
+
+    Journey* journey = nullptr;
+
+    //HOOK Orig_Draw PATCH(&zCViewDraw::Draw, &zCViewDraw::Draw_Hook);
+
+    //void __fastcall zCViewDraw::Draw_Hook() {
+    //    THISCALL(Orig_Draw)();
+    //    if (_GetClassDef() == oCViewDocumentMap::classDef) {
+    //        if (journey) journey->draw();
+    //    }
+    //}
+
     /*
         LOOT MAP
     */
@@ -285,56 +535,82 @@ namespace GOTHIC_ENGINE {
     };
 
 	//void* (__cdecl* game_operator_new)(size_t size) = (void* (__cdecl*)(size_t))0x00565F20;
- //   void(__cdecl* game_operator_delete)(void* ptr) = (void(__cdecl*)(void*))0x00565F60;
+    //   void(__cdecl* game_operator_delete)(void* ptr) = (void(__cdecl*)(void*))0x00565F60;
 
-    struct MapIcon {
-        zCViewFX* view;
-        ItemId id;
-
-        MapIcon() = delete;
-
-        MapIcon(ItemId id, zCViewObject* parent, zSTRING& iconTex) : id(id) {
-            this->view = static_cast<zCViewFX*>(zCViewFX::_CreateNewInstance());
-            this->view->Init(parent, true, 0, 0, 1.0f, 1.0f, iconTex);
-            this->view->Open();
+    class SafeViewFX {
+    public:
+        // Construct + init + open in one go
+        SafeViewFX(zCViewObject* parent,
+            int unk,
+            unsigned long x, unsigned long y,
+            float w, float h,
+            zSTRING& tex)
+        {
+            view = static_cast<zCViewFX*>(zCViewFX::_CreateNewInstance());
+            assert(view && "Failed to create zCViewFX instance");
+            view->Init(parent, unk, x, y, w, h, tex);
+            view->Open();
         }
 
-        // Move constructor
-        MapIcon(MapIcon&& other) noexcept
-            : view(other.view), id(std::move(other.id)) {
-            other.view = nullptr;
+        // Move‑only
+        SafeViewFX(SafeViewFX&& o) noexcept
+            : view(o.view)
+        {
+            o.view = nullptr;
         }
-
-        // Move assignment
-        MapIcon& operator=(MapIcon&& other) noexcept {
-            if (this != &other) {
-                cleanupView();
-                view = other.view;
-                id = std::move(other.id);
-                other.view = nullptr;
+        SafeViewFX& operator=(SafeViewFX&& o) noexcept {
+            if (this != &o) {
+                cleanup();
+                view = o.view;
+                o.view = nullptr;
             }
             return *this;
         }
 
-        // Delete copy constructor and copy assignment
-        MapIcon(const MapIcon&) = delete;
-        MapIcon& operator=(const MapIcon&) = delete;
+        // No copies
+        SafeViewFX(const SafeViewFX&) = delete;
+        SafeViewFX& operator=(const SafeViewFX&) = delete;
 
-        ~MapIcon() {
-            cleanupView();
+        ~SafeViewFX() {
+            cleanup();
         }
+
+        // Expose raw pointer if you need direct access
+        zCViewFX* get() const noexcept { return view; }
 
     private:
-        void cleanupView() {
-            if (view) {
-                view->Close();
+        zCViewFX* view = nullptr;
+
+        void cleanup() {
+            if (!view) return;
+            view->Close();
+            if (view->ViewParent)
                 view->ViewParent->RemoveChild(view);
-                view->Release();
-                assert(view->refCtr <= 0 && "MapIcon view should be released before destruction");
-                delete view;
-                view = nullptr;
-            }
+            view->Release();
+            assert(view->refCtr <= 0 && "zCViewFX not fully released");
+            delete view;
+            view = nullptr;
         }
+    };
+
+    struct MapIcon {
+        SafeViewFX view;
+        ItemId     id;
+
+        MapIcon() = delete;
+
+        MapIcon(ItemId id, zCViewObject* parent, zSTRING& iconTex)
+            : view(parent, true, 0, 0, 1.0f, 1.0f, iconTex),
+            id(std::move(id))
+        {}
+
+        // Move semantics auto‑generated: SafeViewFX is moveable, ItemId too
+        MapIcon(MapIcon&&) noexcept = default;
+        MapIcon& operator=(MapIcon&&) noexcept = default;
+
+        // No copies
+        MapIcon(const MapIcon&) = delete;
+        MapIcon& operator=(const MapIcon&) = delete;
     };
 
 
@@ -470,25 +746,28 @@ namespace GOTHIC_ENGINE {
     void oCViewDocumentMap::UpdatePosition_Hook() {
         THISCALL(Orig_oCViewDocumentMap_UpdatePosition)();
 
+        //if (journey) delete journey;
+        //journey = new Journey(this);
+
         mapIcons.clear();
 
-        int IconW = ViewArrow.PixelSize.X;
-        int IconH = ViewArrow.PixelSize.Y;
         zCViewObject* mapObj = ViewArrow.ViewParent;
-        int mapX = mapObj->PixelPosition.X;
-        int mapY = mapObj->PixelPosition.Y;
-        int mapW = mapObj->PixelSize.X;
-        int mapH = mapObj->PixelSize.Y;
-        float worldMinX = LevelCoords[0]; // dword214
-        float worldMinZ = LevelCoords[1];    // dword214
-        float worldMaxX = LevelCoords[2];    // dword218
-        float worldMaxZ = LevelCoords[3];    // dword21C
-        float worldW = worldMaxX - worldMinX;
-        float worldH = worldMaxZ - worldMinZ;
+        auto IconW = ViewArrow.PixelSize.X;
+        auto IconH = ViewArrow.PixelSize.Y;
+        auto mapX = mapObj->PixelPosition.X;
+        auto mapY = mapObj->PixelPosition.Y;
+        auto mapW = mapObj->PixelSize.X;
+        auto mapH = mapObj->PixelSize.Y;
+        auto worldMinX = LevelCoords[0]; // dword214
+        auto worldMinZ = LevelCoords[1];    // dword214
+        auto worldMaxX = LevelCoords[2];    // dword218
+        auto worldMaxZ = LevelCoords[3];    // dword21C
+        auto worldW = worldMaxX - worldMinX;
+        auto worldH = worldMaxZ - worldMinZ;
         if (worldW == 0.0f || worldH == 0.0f)
             return;
-        float invW = 1.0f / worldW;
-        float invH = 1.0f / worldH;
+        auto invW = 1.0f / worldW;
+        auto invH = 1.0f / worldH;
 
         auto items = RefreshSuperLoot();
 
@@ -509,9 +788,9 @@ namespace GOTHIC_ENGINE {
             mapIcons.emplace_back(id, mapObj, *iconTex);
             MapIcon* icon = &mapIcons.back();
 
-            icon->view->TextureColor = (GetColorForBuffType(type));
+            icon->view.get()->TextureColor = (GetColorForBuffType(type));
             zCPosition size; size.X = IconW; size.Y = IconH;
-            icon->view->SetPixelSize(size);
+            icon->view.get()->SetPixelSize(size);
 
             float nx = (wp[0] - worldMinX) * invW;
             float nz = (wp[2] - worldMinZ) * invH;
@@ -519,8 +798,8 @@ namespace GOTHIC_ENGINE {
             int py = int(mapY + nz * mapH) - IconH / 2;
 
             zCPosition pos; pos.X = px; pos.Y = py;
-            icon->view->SetPixelPosition(pos);
-            icon->view->SetTexture(*iconTex);
+            icon->view.get()->SetPixelPosition(pos);
+            icon->view.get()->SetTexture(*iconTex);
         }
     }
 
@@ -1349,6 +1628,10 @@ namespace GOTHIC_ENGINE {
 
 namespace GOTHIC_ENGINE {
     void Game_Loop() {
+        if (WasKeyJustPressed<KEY_L, KEY_LCONTROL>()) {
+			debugRays = !!!!!debugRays;
+		}
+
         if (WasKeyJustPressed<KEY_X, KEY_LSHIFT>()) {
             xray_enabled = !!!!!xray_enabled;
         }
@@ -1361,6 +1644,8 @@ namespace GOTHIC_ENGINE {
             ps.ShowPlayerStatsWindow();
         }
 
+        if (debugRays) showLootRays();
+
         item_tool.storeVisible();
 
         static int ld, lh, lm;
@@ -1370,6 +1655,7 @@ namespace GOTHIC_ENGINE {
             ld = d; lh = h; lm = m;
             item_tool.RefreshLater();
             ps.refreshPlayerStats();
+            markJourney();
         }
 
         drinkIfCan();
