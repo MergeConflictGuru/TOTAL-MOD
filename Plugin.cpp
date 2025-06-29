@@ -426,14 +426,12 @@ namespace GOTHIC_ENGINE {
         zCArray<zCPositionKey*>  keys;
         zCKBSpline               spline;
         zCOLOR                   color;
-        float                     thickness;
 
     public:
         // Constructor: configure color and thickness
         Journey(oCViewDocumentMap* map,
-            zCOLOR drawColor = zCOLOR(255, 0, 0),
-            float drawThickness = 2.0f)
-            : color(drawColor), thickness(drawThickness)
+            zCOLOR drawColor = zCOLOR(255, 0, 0))
+            : color(drawColor)
         {
             size_t N = journeyLog.size();
             if (N < 4 || !map) return;
@@ -446,7 +444,7 @@ namespace GOTHIC_ENGINE {
 
                 auto& k = keyArr[i];
                 k.t = float(i) / float(N - 1);
-                k.p = zVEC3(nx, nz, 0.0f);
+                k.p = zVEC3(nx, nz, 1.1f);
                 k.tension = 0.0f;
                 k.continuity = 0.0f;
                 k.bias = 0.0f;
@@ -456,12 +454,12 @@ namespace GOTHIC_ENGINE {
 
             spline.InitVars();
             spline.Initialize(keys, 1);
-            spline.ComputeArcLength();
+            //spline.ComputeArcLength();
         }
 
         // Draw with configured color & thickness
         void draw() {
-            spline.Draw(color, thickness);
+            spline.Draw(color, 0);
         }
 
         // Destructor: cleanup
@@ -1581,11 +1579,25 @@ namespace GOTHIC_ENGINE {
         }
     }
 
-    bool __cdecl dummy_SetForegroundWindowEx(struct HWND__ * hwnd) {
-        return 0;
-    }
+    bool __cdecl dummy_SetForegroundWindowEx(struct HWND__* hwnd);
 
     HOOK orig_SetForegroundWindowEx AS(0x00501F30, &dummy_SetForegroundWindowEx);
+
+    bool __cdecl dummy_SetForegroundWindowEx(struct HWND__* hwnd) {
+        return orig_SetForegroundWindowEx(hwnd);
+    }
+
+    __declspec(naked) void sysEvent_NoFocus()
+    {
+        __asm
+        {
+            mov eax, 0x5057A5
+            jmp eax
+        }
+    }
+
+    HOOK orig_sysEvent_Focus AS(0x505642, &sysEvent_NoFocus);
+
 
     /*
         COMMON
@@ -1655,10 +1667,30 @@ namespace GOTHIC_ENGINE {
             ld = d; lh = h; lm = m;
             item_tool.RefreshLater();
             ps.refreshPlayerStats();
-            markJourney();
+            //markJourney();
         }
 
         drinkIfCan();
+
+		static float start = 0.0f, startFactor = 1.0f;
+        bool up = zinput->KeyPressed(KEY_PGUP), down = zinput->KeyPressed(KEY_PGDN);
+        bool justAdd = WasKeyJustPressed<KEY_PGUP>(), justSub = WasKeyJustPressed<KEY_PGDN>();
+        if (up != down) {
+            if (up ? justAdd : justSub) {
+                start = ztimer->totalTimeFloatSecs;
+				startFactor = ztimer->factorMotion;
+            }
+            else {
+                ztimer->factorMotion
+                    = startFactor
+                    * std::pow(1.1f, (ztimer->totalTimeFloatSecs - start) * (up ? 1.0f : -1.0f));
+            }
+        }
+        if (zinput->KeyPressed(KEY_HOME)) {
+            ztimer->factorMotion = 1.0f;
+            start = 0.0f;
+            startFactor = 1.0f;
+		}
     }
 
     void LoadEnd() {
