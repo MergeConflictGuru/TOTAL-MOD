@@ -198,6 +198,9 @@
     <ClCompile Include="StatsWindow.cpp">
       <Filter>Plugin\Workspace\Plugin</Filter>
     </ClCompile>
+    <ClCompile Include="ScriptWindow.cpp">
+      <Filter>Plugin\Workspace\Plugin</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ZenGin\zGothicAPI.h">
@@ -856,6 +859,9 @@
       <Filter>Plugin\Workspace\Plugin</Filter>
     </ClInclude>
     <ClInclude Include="StatsWindow.h">
+      <Filter>Plugin\Workspace\Plugin</Filter>
+    </ClInclude>
+    <ClInclude Include="ScriptWindow.h">
       <Filter>Plugin\Workspace\Plugin</Filter>
     </ClInclude>
   </ItemGroup>

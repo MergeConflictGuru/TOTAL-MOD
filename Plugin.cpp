@@ -11,8 +11,10 @@
 #include <cwchar> // deprecated but still usable for now
 #include <algorithm>
 #include <unordered_map>
+#include <regex>
 #include "ItemTool.h"
 #include "PickPocket.h"
+#include "ScriptWindow.h"
 #include "StatsWindow.h"
 
 namespace std {
@@ -63,6 +65,13 @@ namespace GOTHIC_ENGINE {
     }
 
     #define HOOK_RAW_ORIG(x) (x).GetHookInfo().lpPointer
+
+    static inline std::string wToStr(const wchar_t* wchars) {
+        std::string codeStr;
+        while (wchars && *wchars)
+            codeStr.push_back(static_cast<char>(*(wchars++)));
+        return codeStr;
+    }
 
     /*
         QUICKER LOOT
@@ -182,7 +191,7 @@ namespace GOTHIC_ENGINE {
         }
     }
 
-    bool debugRays = false;
+    bool show_debug_rays = false;
 
     void showLootRays() {
         static constexpr auto BASE_RANGE = 500.0f;
@@ -379,10 +388,287 @@ namespace GOTHIC_ENGINE {
         return THISCALL(ORIG_oCNpcInventory_HandleEvent)(key);
     }
 
+    /*
+        I AM THE SCRIPTOR!!
+        Tread carefully, insect… for with but one malformed token, I can unmake your world.
+    */
+
+    #define CRASH_PLS { *(int*)0xDEAD = 0; __assume(0); }
+
+    class yFILE : public zFILE {
+    public:
+        const std::vector<char>* data;
+		const zSTRING& path;
+        size_t pos;
+        bool opened;
+
+        yFILE(const std::vector<char>* dataPtr, const zSTRING &path)
+            : zCtor(zFILE), data(dataPtr), pos(0), opened(false), path(path) {
+        }
+
+        virtual ~yFILE() {}
+
+        virtual bool Exists() override {
+            return data != nullptr;
+        }
+
+        virtual int Open(bool /*readOnly*/) override {
+            if (!data) return -1;
+            pos = 0;
+            opened = true;
+            return 0;
+        }
+
+        virtual int Reset() override {
+            if (!data) return -1;
+            pos = 0;
+            return 0;
+        }
+
+        virtual bool Eof() override {
+            return !data || pos >= data->size();
+        }
+
+        virtual long Size() override {
+            return data ? static_cast<long>(data->size()) : 0;
+        }
+
+        virtual long Read(void* buf, long cnt) override {
+            if (!opened || !data) return 0;
+            long rem = (long)data->size() - (long)pos;
+            long toRead = cnt < rem ? cnt : rem;
+            if (toRead > 0) {
+                memcpy(buf, data->data() + pos, toRead);
+                pos += toRead;
+            }
+            return toRead;
+        }
+
+        //virtual int Read(zSTRING& out) override {
+        //    if (!opened || !data) return 0;
+        //    size_t start = pos;
+        //    while (pos < data->size() && (*data)[pos] != '\n' && (*data)[pos] != '\r')
+        //        ++pos;
+        //    size_t len = pos - start;
+        //    char* buf = new char[len + 1];
+        //    memcpy(buf, data->data() + start, len);
+        //    buf[len] = '\0';
+        //    out = zSTRING(buf);
+        //    delete[] buf;
+        //    if (pos < data->size() && (*data)[pos] == '\r') ++pos;
+        //    if (pos < data->size() && (*data)[pos] == '\n') ++pos;
+        //    return (int)len;
+        //}
+
+        //virtual int ReadChar(char& c) override {
+        //    if (!opened || !data || Eof()) return 0;
+        //    c = (*data)[pos++];
+        //    return 1;
+        //}
+
+        virtual int Close() override {
+            opened = false;
+            return 0;
+        }
+
+        virtual zSTRING GetFilename() {
+            int pos = path.SearchRev("/", 1);
+            zSTRING filename = pos < 0 ? path : path.Copy(pos + 1, path.Length() - pos - 1);
+            return filename;
+        }
+
+        virtual int Read(zSTRING& out)                              CRASH_PLS;
+		virtual int ReadChar(char&)                                 CRASH_PLS;
+        virtual void SetMode(long)                                  CRASH_PLS;
+        virtual long GetMode()                                      CRASH_PLS;
+        virtual void SetPath(zSTRING)                               CRASH_PLS;
+        virtual void SetDrive(zSTRING)                              CRASH_PLS;
+        virtual void SetDir(zSTRING)                                CRASH_PLS;
+        virtual void SetFile(zSTRING)                               CRASH_PLS;
+        virtual void SetFilename(zSTRING)                           CRASH_PLS;
+        virtual void SetExt(zSTRING)                                CRASH_PLS;
+        virtual _iobuf* GetFileHandle()                             CRASH_PLS;
+        virtual zSTRING GetFullPath()                               CRASH_PLS;
+        virtual zSTRING GetPath()                                   CRASH_PLS;
+        virtual zSTRING GetDirectoryPath()                          CRASH_PLS;
+        virtual zSTRING GetDrive()                                  CRASH_PLS;
+        virtual zSTRING GetDir()                                    CRASH_PLS;
+        virtual zSTRING GetFile()                                   CRASH_PLS;
+        virtual zSTRING GetExt()                                    CRASH_PLS;
+        virtual zSTRING SetCurrentDir()                             CRASH_PLS;
+        virtual int ChangeDir(bool)                                 CRASH_PLS;
+        virtual int SearchFile(zSTRING const&, zSTRING const&, int) CRASH_PLS;
+        virtual bool FindFirst(zSTRING const&)                      CRASH_PLS;
+        virtual bool FindNext()                                     CRASH_PLS;
+        virtual bool DirCreate()                                    CRASH_PLS;
+        virtual bool DirRemove()                                    CRASH_PLS;
+        virtual bool DirExists()                                    CRASH_PLS;
+        virtual bool FileMove(zSTRING, bool)                        CRASH_PLS;
+        virtual bool FileMove(zFILE*)                               CRASH_PLS;
+        virtual bool FileCopy(zSTRING, bool)                        CRASH_PLS;
+        virtual bool FileCopy(zFILE*)                               CRASH_PLS;
+        virtual bool FileDelete()                                   CRASH_PLS;
+        virtual bool IsOpened()                                     CRASH_PLS;
+        virtual int Create()                                        CRASH_PLS;
+        virtual int Create(zSTRING const&)                          CRASH_PLS;
+        virtual int Open(zSTRING const&, bool)                      CRASH_PLS;
+        virtual bool Exists(zSTRING const&)                         CRASH_PLS;
+        virtual void Append()                                       CRASH_PLS;
+        virtual long Pos()                                          CRASH_PLS;
+        virtual int Seek(long)                                      CRASH_PLS;
+        virtual int GetStats(zFILE_STATS&)                          CRASH_PLS;
+        virtual int Write(char const*)                              CRASH_PLS;
+        virtual int Write(zSTRING const&)                           CRASH_PLS;
+        virtual long Write(void const*, long)                       CRASH_PLS;
+        virtual int Read(char*)                                     CRASH_PLS;
+        virtual zSTRING SeekText(zSTRING const&)                    CRASH_PLS;
+        virtual zSTRING ReadBlock(long, long)                       CRASH_PLS;
+        virtual int UpdateBlock(zSTRING const&, long, long)         CRASH_PLS;
+        virtual long FlushBuffer()                                  CRASH_PLS;
+    };
+
+    zFILE* CreateZFile_Hooked(const zSTRING& name);
+
+	HOOK Orig_CreateZFile PATCH(&zCObjectFactory::CreateZFile, &zCObjectFactory::CreateZFile_Hooked);
+
+	std::unordered_map<zSTRING, std::vector<char>> yFiles;
+
+    zFILE* zCObjectFactory::CreateZFile_Hooked(const zSTRING& name) {
+        if (name.StartWith("YFS://")) {
+            auto it = yFiles.find(name);
+            const std::vector<char>* ptr = (it != yFiles.end()) ? &it->second : nullptr;
+            return new yFILE(ptr, it->first);
+        }
+
+        return THISCALL(Orig_CreateZFile)(name); // fallback to original behaviour
+    }
+
+	HOOK Orig_parser_error AS(0x0078E270, &zCParser::Error_Hooked);
+
+	zSTRING parserErrorMsg;
+
+    void zCParser::Error_Hooked(zSTRING& msg, int line) {
+        THISCALL(Orig_parser_error)(msg, line);
+		parserErrorMsg = msg; // store the error message
+	}
+
+    bool ExecScriptCode(const std::string&& codeIn)
+    {
+        static int counter = 0;  // Static counter to persist across calls
+
+        // Generate unique function and file names
+        auto funcName = "DYNAMIC_SCRIPT" + std::to_string(counter++);
+        auto sym = parser->GetIndex(funcName.c_str());
+        auto virtualFile = zSTRING(("YFS://" + funcName + ".d").c_str());
+
+        std::string code = codeIn;
+        static const std::regex re(
+            R"(\b((?:func\s+void|void)\s+)main(?=\s*\())"
+        );
+
+        
+        // First, check if there’s at least one match
+        bool hasMain = std::regex_search(code, re);
+        if (hasMain) {
+            // Do the replace now
+            code = std::regex_replace(
+                code,
+                re,
+                "$1" + funcName
+            );
+        }
+
+        // Store it into the in-memory yFiles map
+        std::vector<char> bytes(code.data(), code.data() + code.length());
+        yFiles[virtualFile] = std::move(bytes);
+
+        // Prepare parser flags
+        auto wasParsingEnabled = parser->enableParsing;
+        auto didStopOnError = parser->stop_on_error;
+        parser->enableParsing = true;
+        parser->stop_on_error = true;
+
+        // Parse the virtual file
+        int parseRes = parser->MergeFile(zSTRING(virtualFile));
+
+        // Restore parser flags
+        parser->enableParsing = wasParsingEnabled;
+        parser->stop_on_error = didStopOnError;
+
+        if (parseRes < 0) {
+            return false;
+        }
+
+        // Call the unique function
+        if (hasMain) {
+            auto sym = parser->GetIndex(funcName.c_str());
+            if (!sym) {
+                return false;
+			}
+            int* result = (int*)parser->CallFunc(sym);
+        }
+
+        return true;
+    }
+
+    class ScriptCanvas {
+        ScriptWindow script_win;
+    public:
+        ScriptCanvas() {
+            script_win.onExecute = [](const std::wstring& code) {
+                ExecScriptCode(wToStr(code.c_str()));
+			};
+		}
+        void open() {
+            zrenderer->Vid_SetScreenMode(zRND_SCRMODE_WINDOWED);
+			script_win.Open();
+		}
+    };
+    
+
+    int ConsoleEvalFunc_Hook(zSTRING const&, zSTRING&);
+	HOOK Orig_oCGame_ConsoleEvalFunc PATCH(&oCGame::ConsoleEvalFunc, &ConsoleEvalFunc_Hook);
+    int ConsoleEvalFunc_Hook(zSTRING const& cmd, zSTRING& result) {
+        if (_strnicmp(cmd.ToChar(), "exec", 4) == 0) {
+			parserErrorMsg.Clear(); // clear previous error message
+            const int prefixLen = 4; // e.g. "exec"
+            if (cmd.Length() >= prefixLen + 2) { // prefix + space + at least 1 char
+                auto toExec = std::string(cmd.ToChar() + prefixLen + 1, cmd.Length() - (prefixLen + 1));
+                if (ExecScriptCode(std::move(toExec))) {
+                    result = "Executed successfully.";
+                    return 1; // success
+                }
+            }
+            result = "Execution failed.";
+            if (!parserErrorMsg.IsEmpty()) {
+                result += "\nError: " + parserErrorMsg;
+            }
+            return 0; // failure
+        }
+
+        return Orig_oCGame_ConsoleEvalFunc(cmd, result);
+	}
+
+    void Game_InitConsole_Hook();
+    HOOK Orig_Game_InitConsole AS(0x006D01F0, &Game_InitConsole_Hook);
+    void Game_InitConsole_Hook() {
+        // Call original init so other commands get registered
+        Orig_Game_InitConsole();
+
+        // Command name and description
+        zSTRING cmdName("exec");
+        zSTRING cmdDesc("Execute script code: exec <code>");
+
+        // Register the command on the console
+        zcon->Register(&cmdName, &cmdDesc);
+    }
+    
 
     /*
         JOURNEY LOG
     */
+
+    /*
 
     std::vector<zVEC3> journeyLog;
     zSTRING journeyWorld;
@@ -478,14 +764,15 @@ namespace GOTHIC_ENGINE {
 
     Journey* journey = nullptr;
 
-    //HOOK Orig_Draw PATCH(&zCViewDraw::Draw, &zCViewDraw::Draw_Hook);
+    HOOK Orig_Draw PATCH(&zCViewDraw::Draw, &zCViewDraw::Draw_Hook);
 
-    //void __fastcall zCViewDraw::Draw_Hook() {
-    //    THISCALL(Orig_Draw)();
-    //    if (_GetClassDef() == oCViewDocumentMap::classDef) {
-    //        if (journey) journey->draw();
-    //    }
-    //}
+    void __fastcall zCViewDraw::Draw_Hook() {
+        THISCALL(Orig_Draw)();
+        if (_GetClassDef() == oCViewDocumentMap::classDef) {
+            if (journey) journey->draw();
+        }
+    }
+    */
 
     /*
         LOOT MAP
@@ -1041,6 +1328,7 @@ namespace GOTHIC_ENGINE {
 
         void ShowPlayerStatsWindow()
         {
+            zrenderer->Vid_SetScreenMode(zRND_SCRMODE_WINDOWED);
             if (!statsWin.Open()) {
                 CMessageW::Error(L"Failed to open StatsWindow.");
                 return;
@@ -1107,16 +1395,9 @@ namespace GOTHIC_ENGINE {
         std::unordered_map<zSTRING, TableResultInWorld> resultsByItemName;
         std::unordered_multimap<void*, NItemSpot&> resultsByHolder;
         std::vector<NItemSpot> fond;
-        zSTRING currentWorld;
+        const char *currentMap = nullptr;
         int selectedRow = -1;
         bool needRefresh = false;
-
-        static inline std::string wToStr(const wchar_t* wchars) {
-            std::string codeStr;
-            while (wchars && *wchars)
-                codeStr.push_back(static_cast<char>(*(wchars++)));
-            return codeStr;
-        }
 
         zSTRING namePls(int row) {
             if (row > (int)tableResults.size() || row < 0)
@@ -1257,27 +1538,37 @@ namespace GOTHIC_ENGINE {
                 RefreshLater();
             }
 
+            zrenderer->Vid_SetScreenMode(zRND_SCRMODE_WINDOWED);
             w.Open();
         }
 
         /* returns worldMatchesMap */
         bool updateMap() {
-            auto wld = ogame->GetGameWorld();
-            auto worldFile = wld->GetWorldFilename();
-            if (currentWorld == worldFile) return true;
-            currentWorld = worldFile;
-
             static constexpr struct {
                 const char* mapTGA;
                 const char* worldZen;
                 float minX, minZ, maxX, maxZ;
             } maps[] = {
+                { "Map_NewWorld_City.tga", "NewWorld\\NewWorld.zen", -6900.0f, 11800.0f, 21600.0f, -9400.0f },
                 { "Map_NewWorld.tga", "NewWorld\\NewWorld.zen", -28000.0f, 50500.0f, 95500.0f, -42500.0f },
                 { "Map_OldWorld.tga", "OldWorld\\OldWorld.zen", -78500.0f, 47500.0f, 54000.0f, -53000.0f },
-                { "Map_AddonWorld_Treasures.tga", "Addon\\AddonWorld.zen", -47783.0f, 36300.0f, 43949.0f, -32300.0f }
+                { "Map_AddonWorld_Treasures.tga", "Addon\\AddonWorld.zen", -47783.0f, 36300.0f, 43949.0f, -32300.0f },
             };
+
+            auto wld = ogame->GetGameWorld();
+            auto worldFile = wld->GetWorldFilename();
+
             for (const auto& map : maps) {
                 if (_stricmp(worldFile, map.worldZen) == 0) {
+                    if (player) {
+                        auto wp = player->GetPositionWorld();
+                        bool insideMap = (wp[0] >= map.minX && wp[0] <= map.maxX) && (wp[2] >= map.maxZ && wp[2] <= map.minZ);
+                        if (!insideMap) continue;
+                    }
+
+                    if (currentMap == map.mapTGA) return true;
+                    currentMap = map.mapTGA;
+
                     int w, h;
                     zCTextureFileFormatTGA t;
                     zCTexConGeneric con;
@@ -1385,7 +1676,8 @@ namespace GOTHIC_ENGINE {
     };
 
     ItemTool item_tool;
-    PlayerStatsWindow ps;
+    ScriptCanvas script_canvas;
+    PlayerStatsWindow player_stats;
 
     /*
         XRAY
@@ -1640,23 +1932,27 @@ namespace GOTHIC_ENGINE {
 
 namespace GOTHIC_ENGINE {
     void Game_Loop() {
-        if (WasKeyJustPressed<KEY_L, KEY_LCONTROL>()) {
-			debugRays = !!!!!debugRays;
+        if (WasKeyJustPressed<KEY_L, KEY_LCONTROL, KEY_LSHIFT>()) {
+			show_debug_rays = !!!!!show_debug_rays;
 		}
 
         if (WasKeyJustPressed<KEY_X, KEY_LSHIFT>()) {
             xray_enabled = !!!!!xray_enabled;
         }
 
-        if (WasKeyJustPressed<KEY_T, KEY_LSHIFT>()) {
+        if (WasKeyJustPressed<KEY_Q, KEY_LCONTROL>()) {
             item_tool.open();
         }
 
-        if (WasKeyJustPressed<KEY_B, KEY_LCONTROL>()) {
-            ps.ShowPlayerStatsWindow();
+        if (WasKeyJustPressed<KEY_W, KEY_LCONTROL>()) {
+            script_canvas.open();
         }
 
-        if (debugRays) showLootRays();
+        if (WasKeyJustPressed<KEY_E, KEY_LCONTROL>()) {
+            player_stats.ShowPlayerStatsWindow();
+        }
+
+        if (show_debug_rays) showLootRays();
 
         item_tool.storeVisible();
 
@@ -1666,7 +1962,7 @@ namespace GOTHIC_ENGINE {
         if (d != ld || h != lh || m != lm) {
             ld = d; lh = h; lm = m;
             item_tool.RefreshLater();
-            ps.refreshPlayerStats();
+            player_stats.refreshPlayerStats();
             //markJourney();
         }
 

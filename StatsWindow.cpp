@@ -32,7 +32,11 @@ bool StatsWindow::Open() {
 
 bool StatsWindow::InitWindow() {
     // Initialize common controls with Unicode support
-    INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_LISTVIEW_CLASSES };
+    INITCOMMONCONTROLSEX icc = {
+      sizeof(icc),
+      ICC_STANDARD_CLASSES
+      | ICC_LISTVIEW_CLASSES
+    };
     InitCommonControlsEx(&icc);
 
     // Explicit Unicode window class
@@ -275,7 +279,6 @@ LRESULT StatsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
 
     case WM_DESTROY:
-        PostQuitMessage(0);
         return 0;
     }
     return DefWindowProcW(m_hMainWindow, msg, wParam, lParam);

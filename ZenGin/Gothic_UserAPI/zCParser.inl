@@ -6,3 +6,4 @@
 
 void* __cdecl CallFunc_Hook_ByIndex(int index, ...);
 void* CallFunc_Hook_ByName(Gothic_II_Addon::zSTRING const& funcName);
+void Error_Hooked(Gothic_II_Addon::zSTRING&, int);

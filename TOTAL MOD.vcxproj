@@ -895,6 +895,7 @@ taskkill /IM "Gothic2.exe" /F 2&gt;nul || exit /b 0</Command>
     <ClCompile Include="ItemTool.cpp" />
     <ClCompile Include="ItemWindow.cpp" />
     <ClCompile Include="Rake.h" />
+    <ClCompile Include="ScriptWindow.cpp" />
     <ClCompile Include="StatsWindow.cpp" />
     <ClCompile Include="ZenGin\Gothic_II_Addon\ClassDeclarators_G2A.cpp" />
     <ClCompile Include="ZenGin\Gothic_II_Addon\Globals_G2A.cpp" />
@@ -904,6 +905,7 @@ taskkill /IM "Gothic2.exe" /F 2&gt;nul || exit /b 0</Command>
     <ClInclude Include="Plugin.h" />
     <ClInclude Include="Headers.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="ScriptWindow.h" />
     <ClInclude Include="Sources.h" />
     <ClInclude Include="StatsWindow.h" />
     <ClInclude Include="UnionAfx.h" />

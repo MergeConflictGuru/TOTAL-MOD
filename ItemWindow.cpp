@@ -17,8 +17,12 @@
 
 ItemWindow::ItemWindow() {
     m_hInst = GetModuleHandle(nullptr);
-    INITCOMMONCONTROLSEX icce = { sizeof(icce), ICC_WIN95_CLASSES };
-    InitCommonControlsEx(&icce);
+    INITCOMMONCONTROLSEX icc = {
+      sizeof(icc),
+      ICC_STANDARD_CLASSES
+      | ICC_LISTVIEW_CLASSES
+    };
+    InitCommonControlsEx(&icc);
 }
 
 // In the destructor:
