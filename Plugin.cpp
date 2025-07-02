@@ -552,6 +552,22 @@ namespace GOTHIC_ENGINE {
 		parserErrorMsg = msg; // store the error message
 	}
 
+	HOOK Orig_parser_insert PATCH(&zCPar_SymbolTable::Insert, &zCPar_SymbolTable::Replace);
+
+    int zCPar_SymbolTable::Replace(zCPar_Symbol* symbol) {
+		bool inserted = THISCALL(Orig_parser_insert)(symbol);
+        if (!inserted) {
+            // If the symbol already exists, replace it
+            int existing = GetIndex(symbol->name.ToChar());
+            if (existing < 0 || table[existing]->type != symbol->type) {
+				return 0; // cannot replace, type mismatch or not found
+            }
+			delete table[existing]; // delete the old symbol
+			table[existing] = symbol;
+        }
+		return 1; // inserted successfully
+    }
+
     bool ExecScriptCode(const std::string&& codeIn)
     {
         static int counter = 0;  // Static counter to persist across calls
@@ -1940,15 +1956,15 @@ namespace GOTHIC_ENGINE {
             xray_enabled = !!!!!xray_enabled;
         }
 
-        if (WasKeyJustPressed<KEY_Q, KEY_LCONTROL>()) {
+        if (WasKeyJustPressed<KEY_R, KEY_LCONTROL>()) {
             item_tool.open();
         }
 
-        if (WasKeyJustPressed<KEY_W, KEY_LCONTROL>()) {
+        if (WasKeyJustPressed<KEY_T, KEY_LCONTROL>()) {
             script_canvas.open();
         }
 
-        if (WasKeyJustPressed<KEY_E, KEY_LCONTROL>()) {
+        if (WasKeyJustPressed<KEY_F, KEY_LCONTROL>()) {
             player_stats.ShowPlayerStatsWindow();
         }
 
