@@ -101,6 +101,10 @@ LRESULT ScriptWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         m_hButton = CreateWindowW(L"BUTTON", L"Execute",
             WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
             10, 320, 100, 30, m_hWnd, (HMENU)ID_BUTTON, m_hInst, nullptr);
+        // Result text
+        m_hResultText = CreateWindowW(L"STATIC", L"",
+            WS_CHILD | WS_VISIBLE,
+            120, 320, 450, 30, m_hWnd, nullptr, m_hInst, nullptr);
         // Subclass for Escape
         ApplyEscSubclass(m_hEdit);
         ApplyEscSubclass(m_hButton);
@@ -125,6 +129,7 @@ LRESULT ScriptWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             int h = rc.bottom - rc.top;
             MoveWindow(m_hEdit, 10, 10, w - 20, h - 60, TRUE);
             MoveWindow(m_hButton, 10, h - 40, 100, 30, TRUE);
+            MoveWindow(m_hResultText, 120, h - 40, w - 130, 30, TRUE);
         }
         return 0;
     }
@@ -133,7 +138,10 @@ LRESULT ScriptWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             int len = GetWindowTextLengthW(m_hEdit);
             std::wstring text(len, L'\0');
             GetWindowTextW(m_hEdit, &text[0], len + 1);
-            if (onExecute) onExecute(text);
+            if (onExecute) {
+                std::wstring result = onExecute(text);
+                SetWindowTextW(m_hResultText, result.c_str());
+            }
         }
         return 0;
     case WM_CLOSE:

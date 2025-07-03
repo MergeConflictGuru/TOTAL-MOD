@@ -10,7 +10,7 @@
 class ScriptWindow {
 public:
     // Callback when Execute button clicked
-    std::function<void(const std::wstring& script)> onExecute;
+    std::function<std::wstring(const std::wstring& script)> onExecute;
     // Callback on focus change
     std::function<void(bool focused)> onFocusChange;
 
@@ -26,6 +26,7 @@ private:
     HWND m_hWnd;
     HWND m_hEdit;
     HWND m_hButton;
+    HWND m_hResultText;
     bool m_initialized = false;
     DWORD m_lastOpenTime = 0;
 

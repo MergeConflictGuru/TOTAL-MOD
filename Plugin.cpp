@@ -66,7 +66,7 @@ namespace GOTHIC_ENGINE {
 
     #define HOOK_RAW_ORIG(x) (x).GetHookInfo().lpPointer
 
-    static inline std::string wToStr(const wchar_t* wchars) {
+    static inline std::string wchar_to_str(const wchar_t* wchars) {
         std::string codeStr;
         while (wchars && *wchars)
             codeStr.push_back(static_cast<char>(*(wchars++)));
@@ -554,8 +554,10 @@ namespace GOTHIC_ENGINE {
 
 	HOOK Orig_parser_insert PATCH(&zCPar_SymbolTable::Insert, &zCPar_SymbolTable::Replace);
 
+    bool replaceSymbols = false;
     int zCPar_SymbolTable::Replace(zCPar_Symbol* symbol) {
-		bool inserted = THISCALL(Orig_parser_insert)(symbol);
+		int inserted = THISCALL(Orig_parser_insert)(symbol);
+		if (!replaceSymbols) return inserted; // if not replacing, return original result
         if (!inserted) {
             // If the symbol already exists, replace it
             int existing = GetIndex(symbol->name.ToChar());
@@ -568,71 +570,78 @@ namespace GOTHIC_ENGINE {
 		return 1; // inserted successfully
     }
 
-    bool ExecScriptCode(const std::string&& codeIn)
-    {
-        static int counter = 0;  // Static counter to persist across calls
-
-        // Generate unique function and file names
+    bool ExecScriptCode(const std::string&& codeIn, std::string& outResult) {
+        static int counter = 0;
         auto funcName = "DYNAMIC_SCRIPT" + std::to_string(counter++);
-        auto sym = parser->GetIndex(funcName.c_str());
         auto virtualFile = zSTRING(("YFS://" + funcName + ".d").c_str());
 
+        // 1) Find & rename "main", capturing its return type
         std::string code = codeIn;
-        static const std::regex re(
-            R"(\b((?:func\s+void|void)\s+)main(?=\s*\())"
+        static const std::regex mainRe(
+            R"(\b((?:func\s+)(void|int|string))\s+main(?=\s*\())"
         );
-
-        
-        // First, check if there’s at least one match
-        bool hasMain = std::regex_search(code, re);
+        std::smatch m;
+        std::string retType;
+        bool hasMain = std::regex_search(code, m, mainRe);
         if (hasMain) {
-            // Do the replace now
+            retType = m[2].str();  // "void", "int" or "string"
             code = std::regex_replace(
                 code,
-                re,
-                "$1" + funcName
+                mainRe,
+                m[1].str() + " " + funcName
             );
         }
 
-        // Store it into the in-memory yFiles map
-        std::vector<char> bytes(code.data(), code.data() + code.length());
-        yFiles[virtualFile] = std::move(bytes);
+        parserErrorMsg.Clear(); // clear previous error message
+        outResult.clear();
 
-        // Prepare parser flags
-        auto wasParsingEnabled = parser->enableParsing;
-        auto didStopOnError = parser->stop_on_error;
+        // 2) Parse into virtual yFile
+        yFiles[virtualFile] = std::vector<char>(code.begin(), code.end());
+        bool prevParse = parser->enableParsing;
+        bool prevStopErr = parser->stop_on_error;
         parser->enableParsing = true;
         parser->stop_on_error = true;
+		replaceSymbols = true;
+        bool err = parser->MergeFile(zSTRING(virtualFile)) < 0;
+        parser->enableParsing = prevParse;
+        parser->stop_on_error = prevStopErr;
+		replaceSymbols = false;
 
-        // Parse the virtual file
-        int parseRes = parser->MergeFile(zSTRING(virtualFile));
-
-        // Restore parser flags
-        parser->enableParsing = wasParsingEnabled;
-        parser->stop_on_error = didStopOnError;
-
-        if (parseRes < 0) {
+        if (err) {
             return false;
+		}
+        if (!hasMain) {
+            return true;
         }
 
-        // Call the unique function
-        if (hasMain) {
-            auto sym = parser->GetIndex(funcName.c_str());
-            if (!sym) {
-                return false;
-			}
-            int* result = (int*)parser->CallFunc(sym);
+        auto sym = parser->GetIndex(funcName.c_str());
+        if (!sym) return false;
+
+        int* retPtr = (int*)parser->CallFunc(sym);
+
+        if (retType == "int") {
+            outResult = std::to_string(*retPtr);
+        }
+        else if (retType == "string") {
+            zSTRING* s = reinterpret_cast<zSTRING*>(*retPtr);
+            outResult = s->ToChar();
         }
 
         return true;
     }
+
 
     class ScriptCanvas {
         ScriptWindow script_win;
     public:
         ScriptCanvas() {
             script_win.onExecute = [](const std::wstring& code) {
-                ExecScriptCode(wToStr(code.c_str()));
+				std::string result;
+                bool success = ExecScriptCode(wchar_to_str(code.c_str()), result);
+                if (!success && !parserErrorMsg.IsEmpty()) {
+					result = "Error: " + parserErrorMsg;
+				}
+                return std::wstring{ result.begin(), result.end() };
 			};
 		}
         void open() {
@@ -646,14 +655,15 @@ namespace GOTHIC_ENGINE {
 	HOOK Orig_oCGame_ConsoleEvalFunc PATCH(&oCGame::ConsoleEvalFunc, &ConsoleEvalFunc_Hook);
     int ConsoleEvalFunc_Hook(zSTRING const& cmd, zSTRING& result) {
         if (_strnicmp(cmd.ToChar(), "exec", 4) == 0) {
-			parserErrorMsg.Clear(); // clear previous error message
             const int prefixLen = 4; // e.g. "exec"
-            if (cmd.Length() >= prefixLen + 2) { // prefix + space + at least 1 char
-                auto toExec = std::string(cmd.ToChar() + prefixLen + 1, cmd.Length() - (prefixLen + 1));
-                if (ExecScriptCode(std::move(toExec))) {
-                    result = "Executed successfully.";
-                    return 1; // success
-                }
+            std::string toExec = cmd.Length() <= prefixLen + 2 
+                ? "" 
+                : std::string(cmd.ToChar() + prefixLen + 1, cmd.Length() - (prefixLen + 1));
+            std::string execResult;
+            if (ExecScriptCode(std::move(toExec), execResult)) {
+                result = ("Executed successfully" +
+                    (execResult.empty() ? "." : std::string(" with result: ") + execResult)).c_str();
+                return 1;
             }
             result = "Execution failed.";
             if (!parserErrorMsg.IsEmpty()) {
@@ -1419,7 +1429,7 @@ namespace GOTHIC_ENGINE {
             if (row > (int)tableResults.size() || row < 0)
                 return "";
             auto res = tableResults[row];
-            return wToStr(insertCodes.view(0, *res)).c_str();
+            return wchar_to_str(insertCodes.view(0, *res)).c_str();
         };
 
         auto markTreasure(zSTRING& findName) {
@@ -1474,7 +1484,7 @@ namespace GOTHIC_ENGINE {
                     row.emplace_back(text);
                 }
 
-                auto ite = resultsByItemName.find(wToStr(insertCodes.view(0, *entryPtr)).c_str());
+                auto ite = resultsByItemName.find(wchar_to_str(insertCodes.view(0, *entryPtr)).c_str());
                 if (ite != resultsByItemName.end()) row.push_back(L"x" + std::to_wstring(ite->second.foundCount));
                 else row.push_back(L"-");
                 rows.push_back(std::move(row));
@@ -1504,7 +1514,7 @@ namespace GOTHIC_ENGINE {
                         insertCodes.sortRows<1, 2>(tableResults, true);
                         for (auto entryPtr : tableResults) {
                             const wchar_t* wchars = insertCodes.view(0, *entryPtr);
-                            resultsByItemName[wToStr(wchars).c_str()] = { entryPtr, 0 };
+                            resultsByItemName[wchar_to_str(wchars).c_str()] = { entryPtr, 0 };
                         }
                     }
 
