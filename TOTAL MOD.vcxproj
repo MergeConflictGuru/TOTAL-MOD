@@ -1124,6 +1124,7 @@ taskkill /IM "Gothic2.exe" /F 2&gt;nul || exit /b 0</Command>
     <None Include=".build_settings.inl" />
     <None Include="debug.bat" />
     <None Include="Plugin.patch" />
+    <None Include="tga1.bin" />
     <None Include="ZenGin\Gothic_UserAPI\CGameManager.inl" />
     <None Include="ZenGin\Gothic_UserAPI\oCAIArrow.inl" />
     <None Include="ZenGin\Gothic_UserAPI\oCAIArrowBase.inl" />
@@ -1753,6 +1754,7 @@ taskkill /IM "Gothic2.exe" /F 2&gt;nul || exit /b 0</Command>
     <ResourceCompile Include="resource.rc" />
   </ItemGroup>
   <ItemGroup>
+    <Image Include="target.tga" />
     <Image Include="union.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

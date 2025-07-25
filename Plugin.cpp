@@ -2,7 +2,7 @@
 #define __VISION__
 
 // This file added in headers queue
-// File: "Sources.h"
+#define NOMINMAX
 #include "resource.h"
 #include <fcntl.h>
 #include <utility>
@@ -471,10 +471,19 @@ namespace GOTHIC_ENGINE {
             return 0;
         }
 
-        virtual zSTRING GetFilename() {
+        virtual zSTRING GetFilename() override {
             int pos = path.SearchRev("/", 1);
-            zSTRING filename = pos < 0 ? path : path.Copy(pos + 1, path.Length() - pos - 1);
-            return filename;
+            pos = pos >= 0 ? pos + 1 : 0;
+            int dotPos = path.SearchRev(".", 1); // from end
+            if (dotPos < pos || dotPos == -1) dotPos = path.Length();
+            auto name = path.Copy(pos, dotPos - pos);
+            return name;
+        }
+
+        virtual zSTRING GetFile() override {
+            int pos = path.SearchRev("/", 1);
+            zSTRING fileWithExt = pos < 0 ? path : path.Copy(pos + 1, path.Length() - pos - 1);
+            return fileWithExt;
         }
 
         virtual int Read(zSTRING& out)                              CRASH_PLS;
@@ -493,7 +502,6 @@ namespace GOTHIC_ENGINE {
         virtual zSTRING GetDirectoryPath()                          CRASH_PLS;
         virtual zSTRING GetDrive()                                  CRASH_PLS;
         virtual zSTRING GetDir()                                    CRASH_PLS;
-        virtual zSTRING GetFile()                                   CRASH_PLS;
         virtual zSTRING GetExt()                                    CRASH_PLS;
         virtual zSTRING SetCurrentDir()                             CRASH_PLS;
         virtual int ChangeDir(bool)                                 CRASH_PLS;
@@ -534,7 +542,9 @@ namespace GOTHIC_ENGINE {
 	std::unordered_map<zSTRING, std::vector<char>> yFiles;
 
     zFILE* zCObjectFactory::CreateZFile_Hooked(const zSTRING& name) {
-        if (name.StartWith("YFS://")) {
+        bool isYFS = name.StartWith("YFS://");
+		//auto shouldBeYFS = (int32_t)name.SearchReverseI("_YFS.") >= 0;
+        if (isYFS/* || shouldBeYFS*/) {
             auto it = yFiles.find(name);
             const std::vector<char>* ptr = (it != yFiles.end()) ? &it->second : nullptr;
             return new yFILE(ptr, it->first);
@@ -689,6 +699,300 @@ namespace GOTHIC_ENGINE {
         zcon->Register(&cmdName, &cmdDesc);
     }
     
+    /*
+		GOTTA CATCH 'EM ALL
+    */
+
+    //class Resource {
+    //    HMODULE hModule = nullptr;
+    //    HRSRC hResource = nullptr;
+    //    HGLOBAL hLoadedResource = nullptr;
+    //    void* pData = nullptr;
+    //    DWORD dataSize = 0;
+    //public:
+    //    // Load resource by ID and type (default to RCDATA)
+    //    Resource(const char* resourceName, const char* resourceType = RT_RCDATA) {
+    //        // Get the HMODULE that actually contains *this* code
+    //        GetModuleHandleExA(
+    //            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+    //            | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+    //            reinterpret_cast<LPCSTR>(&yFiles),
+    //            &hModule
+    //        );
+    //        if (!hModule) return;
+
+    //        hResource = FindResourceA(hModule, resourceName, resourceType);
+    //        if (!hResource) return;
+
+    //        dataSize = SizeofResource(hModule, hResource);
+    //        if (dataSize == 0) return;
+
+    //        hLoadedResource = LoadResource(hModule, hResource);
+    //        if (!hLoadedResource) {
+    //            dataSize = 0;
+    //            return;
+    //        }
+
+    //        pData = LockResource(hLoadedResource);
+    //    }
+
+    //    Resource(int resourceId, const char* resourceType = RT_RCDATA)
+    //        : Resource(MAKEINTRESOURCEA(resourceId), resourceType)
+    //    {
+    //    }
+
+    //    // Check if resource loaded successfully
+    //    bool valid() const {
+    //        return pData != nullptr && dataSize > 0;
+    //    }
+
+    //    // Return pointer to data
+    //    const unsigned char* data() const {
+    //        return (unsigned char*)pData;
+    //    }
+
+    //    // Return size of resource
+    //    DWORD size() const {
+    //        return dataSize;
+    //    }
+    //};
+
+    class SafeViewFX {
+    public:
+        // Construct + init + open in one go
+        SafeViewFX(zCViewObject* parent,
+            int unk,
+            unsigned long x, unsigned long y,
+            float w, float h,
+            const zSTRING& tex)
+        {
+            view = static_cast<zCViewFX*>(zCViewFX::_CreateNewInstance());
+            assert(view && "Failed to create zCViewFX instance");
+            view->Init(parent, unk, x, y, w, h, const_cast<zSTRING&>(tex));
+            view->Open();
+        }
+
+        // Move‑only
+        SafeViewFX(SafeViewFX&& o) noexcept
+            : view(o.view)
+        {
+            o.view = nullptr;
+        }
+        SafeViewFX& operator=(SafeViewFX&& o) noexcept {
+            if (this != &o) {
+                cleanup();
+                view = o.view;
+                o.view = nullptr;
+            }
+            return *this;
+        }
+
+        // No copies
+        SafeViewFX(const SafeViewFX&) = delete;
+        SafeViewFX& operator=(const SafeViewFX&) = delete;
+
+        ~SafeViewFX() {
+            cleanup();
+        }
+
+        // Expose raw pointer if you need direct access
+        zCViewFX* get() const noexcept { return view; }
+
+    private:
+        zCViewFX* view = nullptr;
+
+        void cleanup() {
+            if (!view) return;
+            view->Close();
+            if (view->ViewParent)
+                view->ViewParent->RemoveChild(view);
+            view->Release();
+            assert(view->refCtr <= 0 && "zCViewFX not fully released");
+            delete view;
+            view = nullptr;
+        }
+    };
+
+    struct MapIcon {
+        SafeViewFX view;
+        //ItemId     id;
+
+        MapIcon() = delete;
+
+        MapIcon(/*ItemId id, */zCViewObject* parent, const zSTRING& iconTex)
+            : view(parent, true, 0, 0, 1.0f, 1.0f, iconTex)
+            //, id(std::move(id))
+        {
+        }
+
+        // Move semantics auto‑generated: SafeViewFX is moveable, ItemId too
+        MapIcon(MapIcon&&) noexcept = default;
+        MapIcon& operator=(MapIcon&&) noexcept = default;
+
+        // No copies
+        MapIcon(const MapIcon&) = delete;
+        MapIcon& operator=(const MapIcon&) = delete;
+    };
+
+    struct MAP {
+        static std::vector<MapIcon> mapIcons;
+
+        zCViewObject* mapView;
+        long IconW, IconH;
+        long mapX, mapY, mapW, mapH;
+        float worldMinX, worldMinZ;
+        float invW, invH;
+        bool ok;
+
+        MAP(oCViewDocumentMap& map) : ok(false) {
+            mapView = map.ViewArrow.ViewParent;
+            IconW = map.ViewArrow.PixelSize.X;
+            IconH = map.ViewArrow.PixelSize.Y;
+            mapX = mapView->PixelPosition.X;
+            mapY = mapView->PixelPosition.Y;
+            mapW = mapView->PixelSize.X;
+            mapH = mapView->PixelSize.Y;
+            worldMinX = map.LevelCoords[0]; // dword214
+            worldMinZ = map.LevelCoords[1];    // dword214
+            auto worldMaxX = map.LevelCoords[2];    // dword218
+            auto worldMaxZ = map.LevelCoords[3];    // dword21C
+            auto worldW = worldMaxX - worldMinX;
+            auto worldH = worldMaxZ - worldMinZ;
+            if (worldW == 0.0f || worldH == 0.0f)
+                return;
+            invW = 1.0f / worldW;
+            invH = 1.0f / worldH;
+            ok = true;
+        }
+
+        static void Clear() {
+            mapIcons.clear();
+        }
+
+        MapIcon& AddIcon(zVEC3 wp, const zSTRING& tex, float size = 1.0f, uint32_t color = 0) {
+            assert(ok && "Map not initialized properly");
+
+            zCPosition size2; size2.X = long(IconW * size); size2.Y = long(IconH * size);
+
+            float nx = (wp[0] - worldMinX) * invW;
+            float nz = (wp[2] - worldMinZ) * invH;
+            int px = int(mapX + nx * mapW) - IconW / 2;
+            int py = int(mapY + nz * mapH) - IconH / 2;
+
+            zCPosition pos; pos.X = px; pos.Y = py;
+
+            mapIcons.emplace_back(/*id, */mapView, tex);
+            MapIcon* icon = &mapIcons.back();
+
+            if (color != 0)
+                icon->view.get()->TextureColor = zCOLOR(color);
+            icon->view.get()->SetPixelSize(size2);
+            icon->view.get()->SetPixelPosition(pos);
+            icon->view.get()->SetTexture(*tex);
+
+            return *icon;
+        }
+    };
+
+    std::vector<MapIcon> MAP::mapIcons;
+    std::unordered_map<oCNpc*, zVEC3> discoveredNpcs;
+
+    template <typename T, typename Cb>
+    void find_vobs(zCWorld* world, Cb cb) {
+        zCArray<zCVob*> vobs;
+        world->SearchVobListByBaseClass(T::classDef, vobs, 0);
+        for (int i = 0; i < vobs.GetNum(); ++i) {
+            cb(*reinterpret_cast<T*>(vobs[i]));
+        }
+    };
+
+    template<typename Cb>
+    void DiscoverThingsUsingSymbols(const char* className, Cb cb) {
+        int idxOfClass = parser->GetIndex(zSTRING(className));
+        if (idxOfClass >= 0) {
+            auto count = parser->symtab.GetNumInList();
+            for (int i = 0; i < count; i++) {
+                auto sym = parser->GetSymbolInfo(i);
+				
+                if (!sym) continue;
+                if (!sym->parent) continue;
+                if ((sym->type & 0xF) != 0x7) continue; // ?????
+
+                int baseIdx = parser->GetBase(i);
+                auto base = parser->GetSymbolInfo(baseIdx);
+                if ((base->type & 0xF) == 0x6) baseIdx = parser->GetBase(baseIdx);
+
+                if (baseIdx == idxOfClass) {
+                    auto sym = parser->GetSymbolInfo(i);
+					cb(i, *sym);
+                }
+            }
+		}
+    }
+
+    void DiscoverNpcsInWorld() {
+        discoveredNpcs.clear();
+        DiscoverThingsUsingSymbols("C_NPC", [](int, zCPar_Symbol& sym) {
+            auto off = sym.GetInstanceAdr();
+            if (!off) return;
+            auto npc = ((zCObject*)off)->CastTo<oCNpc>();
+            if (npc == nullptr) return;
+            discoveredNpcs.emplace(npc, npc->GetPositionWorld());
+        });
+        auto SM = ogame->GetSpawnManager();
+        if (SM) {
+            auto& spawns = SM->spawnList;
+            for (int i = 0; i < spawns.GetNum(); ++i) {
+                auto& spawn = spawns[i];
+				auto npc = spawn->npc;
+                const zVEC3 wp = npc->homeWorld ? npc->GetPositionWorld() : spawn->spawnPos;
+                discoveredNpcs.emplace(npc, wp);
+            }
+        }
+        auto world = ogame->GetGameWorld();
+        if (world) {
+            find_vobs<oCNpc>(world, [](oCNpc& npc) {
+                discoveredNpcs.emplace(&npc, npc.GetPositionWorld());
+            });
+        }
+    }
+
+    void GottaMarkThemAll(oCViewDocumentMap& view) {
+        MAP map(view);
+        if (!map.ok) return;
+
+   //     static const zSTRING tex("MENU_MASKE.TGA");
+   //     static const zSTRING tex("YFS://SKULL.TGA");
+   //     if (yFiles.find(tex) == yFiles.end()) {
+   //         auto skullRes = Resource(IDR_SKULL);
+			//assert(skullRes.valid() && "Failed to load skull resource");
+   //         yFiles.try_emplace(tex, skullRes.data(), skullRes.data() + skullRes.size());
+   //     }
+
+        zSTRING aboveTex("O.TGA");
+        zSTRING belowTex("U.TGA");
+
+        zVEC3 wpPlaya = ogame->GetSelfPlayerVob()->GetPositionWorld();
+        auto howHigh = wpPlaya[1];
+
+		size_t xpToGain = 0;
+        DiscoverNpcsInWorld();
+        for (auto &it : discoveredNpcs) {
+			auto npc = it.first;
+			zVEC3 wp = it.second;
+            if (npc == player) continue;
+            if (npc->IsDead()) continue;
+            constexpr int XP_PER_VICTORY = 10;
+            constexpr int AIV_VictoryXPGiven = 16;
+            if (npc->aiscriptvars[AIV_VictoryXPGiven] == 1) continue;
+            if (npc->HasFlag(NPC_FLAG_IMMORTAL)) continue;
+
+            const float size = 3.0f * (npc->level + 18.33f) / (npc->level + 115.0f);
+            zSTRING* iconTex = (wp[1] > howHigh) ? &aboveTex : &belowTex;
+            map.AddIcon(wp, iconTex, size, 0x111111);
+			xpToGain += XP_PER_VICTORY * npc->level;
+		}
+    }
 
     /*
         JOURNEY LOG
@@ -848,85 +1152,6 @@ namespace GOTHIC_ENGINE {
 	//void* (__cdecl* game_operator_new)(size_t size) = (void* (__cdecl*)(size_t))0x00565F20;
     //   void(__cdecl* game_operator_delete)(void* ptr) = (void(__cdecl*)(void*))0x00565F60;
 
-    class SafeViewFX {
-    public:
-        // Construct + init + open in one go
-        SafeViewFX(zCViewObject* parent,
-            int unk,
-            unsigned long x, unsigned long y,
-            float w, float h,
-            zSTRING& tex)
-        {
-            view = static_cast<zCViewFX*>(zCViewFX::_CreateNewInstance());
-            assert(view && "Failed to create zCViewFX instance");
-            view->Init(parent, unk, x, y, w, h, tex);
-            view->Open();
-        }
-
-        // Move‑only
-        SafeViewFX(SafeViewFX&& o) noexcept
-            : view(o.view)
-        {
-            o.view = nullptr;
-        }
-        SafeViewFX& operator=(SafeViewFX&& o) noexcept {
-            if (this != &o) {
-                cleanup();
-                view = o.view;
-                o.view = nullptr;
-            }
-            return *this;
-        }
-
-        // No copies
-        SafeViewFX(const SafeViewFX&) = delete;
-        SafeViewFX& operator=(const SafeViewFX&) = delete;
-
-        ~SafeViewFX() {
-            cleanup();
-        }
-
-        // Expose raw pointer if you need direct access
-        zCViewFX* get() const noexcept { return view; }
-
-    private:
-        zCViewFX* view = nullptr;
-
-        void cleanup() {
-            if (!view) return;
-            view->Close();
-            if (view->ViewParent)
-                view->ViewParent->RemoveChild(view);
-            view->Release();
-            assert(view->refCtr <= 0 && "zCViewFX not fully released");
-            delete view;
-            view = nullptr;
-        }
-    };
-
-    struct MapIcon {
-        SafeViewFX view;
-        ItemId     id;
-
-        MapIcon() = delete;
-
-        MapIcon(ItemId id, zCViewObject* parent, zSTRING& iconTex)
-            : view(parent, true, 0, 0, 1.0f, 1.0f, iconTex),
-            id(std::move(id))
-        {}
-
-        // Move semantics auto‑generated: SafeViewFX is moveable, ItemId too
-        MapIcon(MapIcon&&) noexcept = default;
-        MapIcon& operator=(MapIcon&&) noexcept = default;
-
-        // No copies
-        MapIcon(const MapIcon&) = delete;
-        MapIcon& operator=(const MapIcon&) = delete;
-    };
-
-
-    std::vector<MapIcon> mapIcons;
-
     static PermanentBuffType GetPermanentBuffType(const char* s) {
         if (strncmp(s, "ITPO_PERM_", 10) == 0)
             return PermanentBuffType::Potion;
@@ -948,15 +1173,6 @@ namespace GOTHIC_ENGINE {
         default:                             return 0xFFFFFFFF; // White
         }
     }
-
-    template <typename T, typename Cb>
-    void find_vobs(zCWorld* world, Cb cb) {
-        zCArray<zCVob*> vobs;
-        world->SearchVobListByBaseClass(T::classDef, vobs, 0);
-        for (int i = 0; i < vobs.GetNum(); ++i) {
-            cb(*reinterpret_cast<T*>(vobs[i]));
-        }
-    };
 
     template<typename Info, typename Cb>
 	void find_treasure(std::vector<ItemSpot<Info>> & out, Cb filter) {
@@ -998,7 +1214,8 @@ namespace GOTHIC_ENGINE {
             };
 
             auto find_pp_loot = [&](oCNpc* npc) {
-                if (npc->aiscriptvars[6]) return;
+                constexpr int AIV_PlayerHasPickedMyPocket = 6;
+                if (npc->aiscriptvars[AIV_PlayerHasPickedMyPocket]) return;
                 auto in = parser->GetSymbol(npc->GetInstance());
                 
                 for (auto & info: npcPickpocketItems)
@@ -1018,7 +1235,7 @@ namespace GOTHIC_ENGINE {
 
             find_vobs<oCItem>(world, [&](oCItem& item) {
                 push_item(&item, &item);
-                });
+            });
 
             find_vobs<oCMobContainer>(world, [&](oCMobContainer& container) {
                 auto& items = container.containList;
@@ -1031,18 +1248,20 @@ namespace GOTHIC_ENGINE {
 
             auto player = ogame->GetSelfPlayerVob();
 
-            find_vobs<oCNpc>(world, [&](oCNpc& npc) {
-                if (&npc == player) // Only process NPCs that are not the player
-                    return;
+            DiscoverNpcsInWorld();
+            for (auto& it : discoveredNpcs) {
+                auto npc = it.first;
+                if (npc == player) // Only process NPCs that are not the player
+                    continue;
 
-                auto& items = npc.inventory2.inventory;
+                auto& items = npc->inventory2.inventory;
                 for (auto b = items.next; b; b = b->next) {
                     oCItem& item = *b->data;
-                    push_item(&item, &npc);
+                    push_item(&item, npc);
                 }
 
-                find_pp_loot(&npc);
-            });
+                find_pp_loot(npc);
+            }
 
             find_treasure(result, filter);
         };
@@ -1054,31 +1273,9 @@ namespace GOTHIC_ENGINE {
         return RefreshLoot<PermanentBuffType>(GetPermanentBuffType);
     }
 
-    void oCViewDocumentMap::UpdatePosition_Hook() {
-        THISCALL(Orig_oCViewDocumentMap_UpdatePosition)();
-
-        //if (journey) delete journey;
-        //journey = new Journey(this);
-
-        mapIcons.clear();
-
-        zCViewObject* mapObj = ViewArrow.ViewParent;
-        auto IconW = ViewArrow.PixelSize.X;
-        auto IconH = ViewArrow.PixelSize.Y;
-        auto mapX = mapObj->PixelPosition.X;
-        auto mapY = mapObj->PixelPosition.Y;
-        auto mapW = mapObj->PixelSize.X;
-        auto mapH = mapObj->PixelSize.Y;
-        auto worldMinX = LevelCoords[0]; // dword214
-        auto worldMinZ = LevelCoords[1];    // dword214
-        auto worldMaxX = LevelCoords[2];    // dword218
-        auto worldMaxZ = LevelCoords[3];    // dword21C
-        auto worldW = worldMaxX - worldMinX;
-        auto worldH = worldMaxZ - worldMinZ;
-        if (worldW == 0.0f || worldH == 0.0f)
-            return;
-        auto invW = 1.0f / worldW;
-        auto invH = 1.0f / worldH;
+    void MarkMyLootOnMap(oCViewDocumentMap& view) {
+        MAP map(view);
+        if (!map.ok) return;
 
         auto items = RefreshSuperLoot();
 
@@ -1089,29 +1286,25 @@ namespace GOTHIC_ENGINE {
         auto howHigh = wpPlaya[1];
 
         for (auto& found : items) {
-            auto& id = found.id;
-			auto& wp = found.position;
-			auto type = (PermanentBuffType)found.type;
-            uint64_t id_packed = id;
+            auto& wp = found.position;
+            auto type = (PermanentBuffType)found.type;
 
             zSTRING* iconTex = (wp[1] > howHigh) ? &aboveTex : &belowTex;
 
-            mapIcons.emplace_back(id, mapObj, *iconTex);
-            MapIcon* icon = &mapIcons.back();
-
-            icon->view.get()->TextureColor = (GetColorForBuffType(type));
-            zCPosition size; size.X = IconW; size.Y = IconH;
-            icon->view.get()->SetPixelSize(size);
-
-            float nx = (wp[0] - worldMinX) * invW;
-            float nz = (wp[2] - worldMinZ) * invH;
-            int px = int(mapX + nx * mapW) - IconW / 2;
-            int py = int(mapY + nz * mapH) - IconH / 2;
-
-            zCPosition pos; pos.X = px; pos.Y = py;
-            icon->view.get()->SetPixelPosition(pos);
-            icon->view.get()->SetTexture(*iconTex);
+            auto color = GetColorForBuffType(type);
+            map.AddIcon(wp, *iconTex, 1.0f, color);
         }
+    }
+
+    void oCViewDocumentMap::UpdatePosition_Hook() {
+        THISCALL(Orig_oCViewDocumentMap_UpdatePosition)();
+
+        //if (journey) delete journey;
+        //journey = new Journey(this);        
+
+		MAP::Clear();
+		MarkMyLootOnMap(*this);
+		GottaMarkThemAll(*this);
     }
 
     void oCViewDocumentMap::Dtor_Hook() {
@@ -1656,10 +1849,6 @@ namespace GOTHIC_ENGINE {
         }
 
         void DiscoverItems() {
-            zSTRING C_Item("C_Item");
-            int idxOfItem = parser->GetIndex(&C_Item);
-
-
             oCItem* dummy = static_cast<oCItem*>(oCItem::_CreateNewInstance());
             dummy->Release();
             zSTRING realName;
@@ -1667,35 +1856,23 @@ namespace GOTHIC_ENGINE {
 
             insertCodes.clear();
 
-            auto count = parser->symtab.GetNumInList();
-            for (int i = 0; i < count; i++) {
-                auto sym = parser->GetSymbolInfo(i);
-                if (!sym) continue;
-                if (!sym->parent) continue;
-                if ((sym->type & 0xF) != 0x7) continue; // ?????
+            DiscoverThingsUsingSymbols("C_Item", [&](int i, zCPar_Symbol& sym) {
+                const char* symName = sym.name.ToChar();
 
-                int baseIdx = parser->GetBase(i);
-                auto base = parser->GetSymbolInfo(baseIdx);
-                if ((base->type & 0xF) == 0x6) baseIdx = parser->GetBase(baseIdx);
+                dummy->oCItem::oCItem();
+                parser->CreateInstance(i, dummy);
+                realName = dummy->GetName(0);
+                zSTRING& desc = dummy->GetDescription();
 
-                if (baseIdx == idxOfItem) {
-                    auto sym = parser->GetSymbolInfo(i);
-                    const char* symName = sym->name.ToChar();
+                wReal = !realName.IsEmpty() ? cp_to_wstring(realName.ToChar()) : L"";
+                wDesc = !desc.IsEmpty() ? cp_to_wstring(desc.ToChar()) : L"";
 
-                    dummy->oCItem::oCItem();
-                    parser->CreateInstance(i, dummy);
-                    realName = dummy->GetName(0);
-                    zSTRING& desc = dummy->GetDescription();
+                dummy->Release();
+                dummy->~oCItem();
 
-                    wReal = !realName.IsEmpty() ? cp_to_wstring(realName.ToChar()) : L"";
-                    wDesc = !desc.IsEmpty() ? cp_to_wstring(desc.ToChar()) : L"";
+                insertCodes.add({ std::wstring(symName, symName + std::strlen(symName)), wReal, wDesc });
+			});
 
-                    dummy->Release();
-                    dummy->~oCItem();
-
-                    insertCodes.add({ std::wstring(symName, symName + std::strlen(symName)), wReal, wDesc });
-                }
-            }
             delete dummy;
         }
 
@@ -2013,6 +2190,34 @@ namespace GOTHIC_ENGINE {
             start = 0.0f;
             startFactor = 1.0f;
 		}
+
+        constexpr int BUMP = 1;
+        int x = 0, y = 0;
+        static int uiy = -1, uih = 0;
+        if (ogame) {
+            if (uiy < 0 && ogame->hpBar) {
+                ogame->hpBar->GetPos(x, y);
+                if (y > 0) uiy = y;
+                ogame->hpBar->GetSize(x, y);
+				if (y > 0) uih = y;
+            }
+            else {
+                for (auto& bar : { ogame->hpBar, ogame->manaBar, ogame->swimBar }) {
+                    if (bar) {
+                        bar->GetPos(x, y);
+                        if (y != uiy) {
+                            bar->SetPos(x, uiy);
+                        }
+                    }
+                }
+            }
+        }
+        if (zinput->KeyPressed(KEY_INSERT) && zinput->KeyPressed(KEY_LCONTROL)) {
+            if (uiy >= BUMP) uiy -= BUMP;
+        }
+        if (zinput->KeyPressed(KEY_DELETE) && zinput->KeyPressed(KEY_LCONTROL)) {
+			if (uiy <= 8191 - BUMP - uih) uiy += BUMP;
+        }
     }
 
     void LoadEnd() {

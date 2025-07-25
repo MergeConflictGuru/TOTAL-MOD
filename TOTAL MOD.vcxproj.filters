@@ -2747,11 +2747,13 @@
     <None Include="debug.bat">
       <Filter>Plugin\Workspace\Plugin</Filter>
     </None>
+    <None Include="tga1.bin" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="resource.rc" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="union.ico" />
+    <Image Include="target.tga" />
   </ItemGroup>
 </Project>
