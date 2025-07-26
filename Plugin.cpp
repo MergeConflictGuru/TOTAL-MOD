@@ -74,7 +74,7 @@ namespace GOTHIC_ENGINE {
     }
 
     /*
-        QUICKER LOOT
+        MASS LOOT
     */
 
     HOOK Orig_oCNpcDoTakeVob PATCH(&oCNpc::DoTakeVob, &oCNpc::DoTakeVob_Hook);
@@ -98,8 +98,8 @@ namespace GOTHIC_ENGINE {
         MOVE_JUMP_CHASM = 9   // Chasm can be jumped over
     };
 
-    zCArray<oCItem*> scanItems(zCVob* root, float range) {
-        zCArray<oCItem*> surrounding;
+    auto scanItemHolders(zCVob* root, float range) {
+        zCArray<zCVob*> surrounding;
         if (!root || !root->homeWorld) {
             return surrounding; // no items if no root or world
 		}
@@ -112,7 +112,9 @@ namespace GOTHIC_ENGINE {
         root->homeWorld->bspTree.bspRoot->CollectVobsInBBox3D(reinterpret_cast<zCArray<zCVob*>&>(surrounding), bbox);
         for (int i = surrounding.GetNum() - 1; i >= 0; --i) {
             auto otherVob = surrounding[i];
-            if (otherVob->_GetClassDef() == oCItem::classDef) // only items
+			bool isItem = (otherVob->_GetClassDef() == oCItem::classDef);
+			bool isNpc = (otherVob->_GetClassDef() == oCNpc::classDef);
+            if (isItem || isNpc)
             {
                 auto otherWp = otherVob->GetPositionWorld();
                 if (otherWp.Distance(wp) <= range) {
@@ -124,7 +126,7 @@ namespace GOTHIC_ENGINE {
         return surrounding;
     }
 
-    void filterReachableItems(zCArray<oCItem*>& items, float range, bool debug) {
+    void filterReachableObjects(zCArray<zCVob*>& objs, float range, bool debug) {
         auto world = ogame->GetGameWorld();
         zVEC3 playerPos = player->bbox3D.GetCenter();
         playerPos[1] = player->bbox3D.maxs[1];
@@ -134,8 +136,8 @@ namespace GOTHIC_ENGINE {
         static constexpr float TWOPI = 2.0f * 3.141592653589793238462643383279502884f;
 
         zCArray<zCVob*> ignore;
-        ignore.AllocAbs(items.GetNum());
-        std::memcpy(ignore.GetArray(), items.GetArray(), items.GetNum() * sizeof(decltype(items[0])));
+        ignore.AllocAbs(objs.GetNum());
+        std::memcpy(ignore.GetArray(), objs.GetArray(), objs.GetNum() * sizeof(decltype(objs[0])));
         ignore.InsertEnd(player);
 
         auto hasClearLineOfSight = [&](const zVEC3& src, const zVEC3& dst) -> bool {
@@ -147,8 +149,8 @@ namespace GOTHIC_ENGINE {
         zVEC3 testPoints[numPoints];
 		bool hasTestPoints = false;
 
-        for (int i = items.GetNum() - 1; i >= 0; --i) {
-            auto* item = items[i];
+        for (int i = objs.GetNum() - 1; i >= 0; --i) {
+            auto* item = objs[i];
 
             // Compute the average bbox radius for the item
             zVEC3 bboxCenter = item->bbox3D.GetCenter();
@@ -186,20 +188,22 @@ namespace GOTHIC_ENGINE {
             }
 
             if (!clearView) {
-                items.RemoveIndex(i);
+                objs.RemoveIndex(i);
             }
         }
     }
 
     bool show_debug_rays = false;
+    static constexpr auto BASE_RANGE = 500.0f;
+    static constexpr auto RANGE_GROWTH = 4.0f;
 
     void showLootRays() {
-        static constexpr auto BASE_RANGE = 500.0f;
+        
         bool grab_all = zinput->KeyPressed(KEY_LSHIFT);
         float range = BASE_RANGE;
-        if (grab_all) range *= 2;
-        auto gimme = scanItems(player, range);
-		filterReachableItems(gimme, range, true);
+        if (grab_all) range *= RANGE_GROWTH;
+        auto gimme = scanItemHolders(player, range);
+		filterReachableObjects(gimme, range, true);
     }
 
     int oCNpc::DoTakeVob_Hook(zCVob* vob) {
@@ -207,11 +211,10 @@ namespace GOTHIC_ENGINE {
 
         if (!isPlayer) return THISCALL(Orig_oCNpcDoTakeVob)(vob);
 
-        static constexpr auto BASE_RANGE = 500.0f;
         bool grab_all = zinput->KeyPressed(KEY_LSHIFT);
         float range = BASE_RANGE;
-        if (grab_all) range *= 2;
-        auto gimme = scanItems(vob, range);
+        if (grab_all) range *= RANGE_GROWTH;
+        auto gimme = scanItemHolders(vob, range);
         auto took = THISCALL(Orig_oCNpcDoTakeVob)(vob);
 		if (!took) return 0; // no item taken, exit early
 
@@ -223,7 +226,8 @@ namespace GOTHIC_ENGINE {
             bool grab_this = grab_all;
             if (!grab_all) {
                 for (auto i = 0; i < _countof(patterns); ++i) {
-                    if (strncmp(vobId.ToChar(), patterns[i], pattern_lens[i]) == 0 && strncmp(otherId.ToChar(), patterns[i], pattern_lens[i]) == 0) {
+					auto isItem = (otherItem->_GetClassDef() == oCItem::classDef);
+                    if (isItem && strncmp(vobId.ToChar(), patterns[i], pattern_lens[i]) == 0 && strncmp(otherId.ToChar(), patterns[i], pattern_lens[i]) == 0) {
                         grab_this = true;
                         break; // only one match is needed
                     }
@@ -233,11 +237,28 @@ namespace GOTHIC_ENGINE {
 			if (!grab_this) gimme.RemoveIndex(i);
 		}
 
-		filterReachableItems(gimme, range, false);
+		filterReachableObjects(gimme, range, false);
 
         for (int i = gimme.GetNum() - 1; i >= 0; --i) {
-            auto item = gimme[i];
-			DoPutInInventory(item);
+            auto thing = gimme[i];
+            if ((thing->_GetClassDef() == oCItem::classDef)) {
+				DoPutInInventory(reinterpret_cast<oCItem*>(thing));
+            }
+            else if ((thing->_GetClassDef() == oCNpc::classDef)) {
+                auto npc = reinterpret_cast<oCNpc*>(thing);
+                if (npc->IsUnconscious() || npc->IsDead()) {
+                    auto& items = npc->inventory2.inventory;
+                    for (auto b = items.next; b; b = b->next) {
+                        oCItem* item = b->data;
+                        if (!item->HasFlag(ITM_CAT_ARMOR))
+                        {
+                            item = npc->RemoveFromInv(item, item->amount);
+							DoPutInInventory(item);
+							
+                        }
+                    }
+                }
+            }
 		}
 
         /*
