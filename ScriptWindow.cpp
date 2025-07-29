@@ -96,7 +96,7 @@ LRESULT ScriptWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         m_hEdit = CreateWindowW(L"EDIT", L"",
             WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL,
             10, 10, 560, 300, m_hWnd, (HMENU)ID_EDIT, m_hInst, nullptr);
-        SetWindowTextW(m_hEdit, L"func void main()\r\n{\r\n\t//put your code here\r\n};");
+        SetWindowTextW(m_hEdit, L"func int main()\r\n{\r\n\t//put your code here\r\n\treturn 0;\r\n};");
         // Button
         m_hButton = CreateWindowW(L"BUTTON", L"Execute",
             WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,

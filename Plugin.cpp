@@ -419,7 +419,7 @@ namespace GOTHIC_ENGINE {
     class yFILE : public zFILE {
     public:
         const std::vector<char>* data;
-		const zSTRING& path;
+		const zSTRING path;
         size_t pos;
         bool opened;
 
@@ -568,20 +568,40 @@ namespace GOTHIC_ENGINE {
         if (isYFS/* || shouldBeYFS*/) {
             auto it = yFiles.find(name);
             const std::vector<char>* ptr = (it != yFiles.end()) ? &it->second : nullptr;
-            return new yFILE(ptr, it->first);
+            return new yFILE(ptr, name);
         }
 
         return THISCALL(Orig_CreateZFile)(name); // fallback to original behaviour
     }
 
-	HOOK Orig_parser_error AS(0x0078E270, &zCParser::Error_Hooked);
+    template <typename T>
+    auto HOOK_CALL_TARGET(uintptr_t callInstrAddr, T myHookFunc) {
+        assert(*(uint8_t*)callInstrAddr == 0xE8);
+        int32_t rel = *(int32_t*)(callInstrAddr + 1);
+        uint actualTarget = callInstrAddr + 5 + rel;
+        return std::unique_ptr<CInvoke<T>>(new CInvoke<T>(actualTarget, myHookFunc, IVK_AUTO));
+    }
 
-	zSTRING parserErrorMsg;
+    #define HOOK_ERROR() HOOK_CALL_TARGET(0x0078F8C4, &zCParser::Error_Hooked)
+
+    decltype(HOOK_ERROR()) p_Orig_parser_error;
+
+	std::vector<zSTRING> parserErrors;
 
     void zCParser::Error_Hooked(zSTRING& msg, int line) {
-        THISCALL(Orig_parser_error)(msg, line);
-		parserErrorMsg = msg; // store the error message
+        THISCALL(*p_Orig_parser_error)(msg, line);
+		parserErrors.push_back(msg); // store the error message
 	}
+
+    zSTRING formatErrors() {
+        if (parserErrors.empty()) return zSTRING();
+        zSTRING result = "Errors: ";
+        for (size_t i = 0; i < parserErrors.size(); ++i) {
+            result += "(" + zSTRING(std::to_string(i).c_str()) + ") " + parserErrors[i];
+            if (i + 1 < parserErrors.size()) result += ", ";
+        }
+		return result;
+    }
 
 	HOOK Orig_parser_insert PATCH(&zCPar_SymbolTable::Insert, &zCPar_SymbolTable::Replace);
 
@@ -604,7 +624,7 @@ namespace GOTHIC_ENGINE {
     bool ExecScriptCode(const std::string&& codeIn, std::string& outResult) {
         static int counter = 0;
         auto funcName = "DYNAMIC_SCRIPT" + std::to_string(counter++);
-        auto virtualFile = zSTRING(("YFS://" + funcName + ".d").c_str());
+        auto virtualFile = zSTRING(("YFS://" + funcName + ".D").c_str());
 
         // 1) Find & rename "main", capturing its return type
         std::string code = codeIn;
@@ -623,7 +643,7 @@ namespace GOTHIC_ENGINE {
             );
         }
 
-        parserErrorMsg.Clear(); // clear previous error message
+        parserErrors.clear(); // clear previous error messages
         outResult.clear();
 
         // 2) Parse into virtual yFile
@@ -631,14 +651,17 @@ namespace GOTHIC_ENGINE {
         bool prevParse = parser->enableParsing;
         bool prevStopErr = parser->stop_on_error;
         parser->enableParsing = true;
-        parser->stop_on_error = true;
+        parser->stop_on_error = false;
 		replaceSymbols = true;
+        if (!p_Orig_parser_error) {
+            p_Orig_parser_error = HOOK_ERROR();
+        }
         bool err = parser->MergeFile(zSTRING(virtualFile)) < 0;
         parser->enableParsing = prevParse;
         parser->stop_on_error = prevStopErr;
 		replaceSymbols = false;
 
-        if (err) {
+        if (err || !parserErrors.empty()) {
             return false;
 		}
         if (!hasMain) {
@@ -669,8 +692,8 @@ namespace GOTHIC_ENGINE {
             script_win.onExecute = [](const std::wstring& code) {
 				std::string result;
                 bool success = ExecScriptCode(wchar_to_str(code.c_str()), result);
-                if (!success && !parserErrorMsg.IsEmpty()) {
-					result = "Error: " + parserErrorMsg;
+                if (!success || !parserErrors.empty()) {
+                    result = formatErrors();
 				}
                 return std::wstring{ result.begin(), result.end() };
 			};
@@ -697,8 +720,8 @@ namespace GOTHIC_ENGINE {
                 return 1;
             }
             result = "Execution failed.";
-            if (!parserErrorMsg.IsEmpty()) {
-                result += "\nError: " + parserErrorMsg;
+            if (!parserErrors.empty()) {
+				result += "\n" + formatErrors();
             }
             return 0; // failure
         }
