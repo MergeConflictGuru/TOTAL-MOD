@@ -17,6 +17,13 @@
 #include "ScriptWindow.h"
 #include "StatsWindow.h"
 
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+
 namespace std {
     template <>
     struct hash<GOTHIC_ENGINE::zSTRING> {
@@ -1821,38 +1828,52 @@ namespace GOTHIC_ENGINE {
             auto wld = ogame->GetGameWorld();
             auto worldFile = wld->GetWorldFilename();
 
+			bool bestInsideMap = false;
+			float bestMapArea = 0.0f;
+            decltype(&maps[0]) bestMap = nullptr;
+
             for (const auto& map : maps) {
                 if (_stricmp(worldFile, map.worldZen) == 0) {
+                    bool insideMap = false;
+					auto minX = std::min(map.minX, map.maxX), maxX = std::max(map.minX, map.maxX), minZ = std::min(map.minZ, map.maxZ), maxZ = std::max(map.minZ, map.maxZ);
                     if (player) {
                         auto wp = player->GetPositionWorld();
-                        bool insideMap = (wp[0] >= map.minX && wp[0] <= map.maxX) && (wp[2] >= map.maxZ && wp[2] <= map.minZ);
-                        if (!insideMap) continue;
+                        insideMap = (wp[0] >= minX && wp[0] <= maxX) && (wp[2] >= minZ && wp[2] <= maxZ);
                     }
-
-                    if (currentMap == map.mapTGA) return true;
-                    currentMap = map.mapTGA;
-
-                    int w, h;
-                    zCTextureFileFormatTGA t;
-                    zCTexConGeneric con;
-                    t.LoadTexture(zSTRING(map.mapTGA), &con);
-                    con.ConvertToNewFormat(zRND_TEX_FORMAT_RGBA_8888);
-                    w = con.GetTextureInfo().sizeX;
-                    h = con.GetTextureInfo().sizeY;
-                    void* data;
-                    int stride;
-                    con.GetTextureBuffer(0, data, stride);
-                    this->w.ShowImage((uint8_t*)data, w, h);
-                    t.Release();
-
-                    wx = map.minX;
-                    wz = map.minZ;
-                    ww = map.maxX - wx;
-                    wh = map.maxZ - wz;
-                    return true;
+					float area = (maxX - minX) * (maxZ - minZ);
+                    if (!insideMap && bestInsideMap) continue;
+                    if (!bestMap || insideMap && !bestInsideMap || (insideMap ? area < bestMapArea : area > bestMapArea)) {
+                        bestMap = &map;
+                        bestInsideMap = insideMap;
+                        bestMapArea = area;
+                    }
                 }
             }
-            return false;
+
+            if (!bestMap) return false;
+
+			auto& map = *bestMap;
+            if (currentMap == map.mapTGA) return true;
+            currentMap = map.mapTGA;
+
+            int w, h;
+            zCTextureFileFormatTGA t;
+            zCTexConGeneric con;
+            t.LoadTexture(zSTRING(map.mapTGA), &con);
+            con.ConvertToNewFormat(zRND_TEX_FORMAT_RGBA_8888);
+            w = con.GetTextureInfo().sizeX;
+            h = con.GetTextureInfo().sizeY;
+            void* data;
+            int stride;
+            con.GetTextureBuffer(0, data, stride);
+            this->w.ShowImage((uint8_t*)data, w, h);
+            t.Release();
+
+            wx = map.minX;
+            wz = map.minZ;
+            ww = map.maxX - wx;
+            wh = map.maxZ - wz;
+            return true;
         }
 
         void RefreshNow() {

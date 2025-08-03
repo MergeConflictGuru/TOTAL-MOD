@@ -1,4 +1,5 @@
 ﻿#include "StatsWindow.h"
+#define NOMINMAX
 #include <Windows.h>
 #include <commctrl.h>
 #include <vector>
