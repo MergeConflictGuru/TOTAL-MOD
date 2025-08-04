@@ -133,7 +133,28 @@ namespace GOTHIC_ENGINE {
         return surrounding;
     }
 
-    void filterReachableObjects(zCArray<zCVob*>& objs, float range, bool debug) {
+    template <typename ItemCallback, typename NpcItemCallback>
+    void collect_loot_targets(zCVob* thing, ItemCallback onItem, NpcItemCallback onNpcItem) {
+        if (thing->_GetClassDef() == oCItem::classDef) {
+            onItem(reinterpret_cast<oCItem*>(thing));
+        }
+        else if (thing->_GetClassDef() == oCNpc::classDef) {
+            auto npc = reinterpret_cast<oCNpc*>(thing);
+            if (npc->IsUnconscious() || npc->IsDead()) {
+                auto& items = npc->inventory2.inventory;
+                for (decltype(items.next) b = items.next, next; b; b = next) {
+                    next = b->next;
+                    oCItem* item = b->data;
+                    if (!item->HasFlag(ITM_CAT_ARMOR))
+                    {
+                        onNpcItem(npc, item);
+                    }
+                }
+            }
+        }
+    }
+
+    void filterReachableObjects(zCArray<zCVob*>& objs, float range, bool debug, zCOLOR(*which_color)(zCVob&, bool) = nullptr) {
         auto world = ogame->GetGameWorld();
         zVEC3 playerPos = player->bbox3D.GetCenter();
         playerPos[1] = player->bbox3D.maxs[1];
@@ -147,10 +168,16 @@ namespace GOTHIC_ENGINE {
         std::memcpy(ignore.GetArray(), objs.GetArray(), objs.GetNum() * sizeof(decltype(objs[0])));
         ignore.InsertEnd(player);
 
-        auto hasClearLineOfSight = [&](const zVEC3& src, const zVEC3& dst) -> bool {
+        auto hasClearLineOfSight = [&](const zVEC3& src, const zVEC3& dst, zCVob& thing) -> bool {
             auto rv = world->TraceRayFirstHit(src, dst - src, &ignore, flags);
-            if (debug) zlineCache->Line3D(src, dst, rv ? zCOLOR(255, 0, 0) : zCOLOR(0, 255, 0), 0);
-            return !rv;
+            bool clear_sight = !rv;
+            if (debug) {
+				zCOLOR color = which_color 
+                    ? which_color(thing, clear_sight) 
+                    : (clear_sight ? zCOLOR(0, 255, 0) : zCOLOR(255, 0, 0));
+                zlineCache->Line3D(src, dst, color, 0);
+            }
+            return clear_sight;
             };
 
         zVEC3 testPoints[numPoints];
@@ -169,7 +196,7 @@ namespace GOTHIC_ENGINE {
 
             bool clearView = false;
 
-            if (hasClearLineOfSight(playerPos, itemSurfaceFacingPlayer)) {
+            if (hasClearLineOfSight(playerPos, itemSurfaceFacingPlayer, *item)) {
                 clearView = true;
             }
             else {
@@ -187,9 +214,9 @@ namespace GOTHIC_ENGINE {
 
                 // Check visibility from each test point
                 for (auto& testPoint : testPoints) {
-                    if (!hasClearLineOfSight(playerPos, testPoint)) continue;
+                    if (!hasClearLineOfSight(playerPos, testPoint, *item)) continue;
                     zVEC3 itemSurfaceFacingPoint = bboxCenter - (bboxCenter - testPoint).Normalize() * avgRadius;
-                    if (!hasClearLineOfSight(testPoint, itemSurfaceFacingPoint)) continue;
+                    if (!hasClearLineOfSight(testPoint, itemSurfaceFacingPoint, *item)) continue;
                     clearView = true;
                 }
             }
@@ -210,7 +237,24 @@ namespace GOTHIC_ENGINE {
         float range = BASE_RANGE;
         if (grab_all) range *= RANGE_GROWTH;
         auto gimme = scanItemHolders(player, range);
-		filterReachableObjects(gimme, range, true);
+		filterReachableObjects(gimme, range, true, [](zCVob& vob, bool clear) -> zCOLOR {
+            int grab_pct = 0;
+            collect_loot_targets(&vob,
+                [&](oCItem* item) {
+                    grab_pct = 100;
+                },
+                [&](oCNpc* npc, oCItem* item) {
+                    grab_pct = 100;
+                } // always true for NPC items
+            );
+            if (!clear) grab_pct = -1;
+            switch (grab_pct) {
+            case -1: return zCOLOR(255, 0, 0); break; // red
+            case 0: return zCOLOR(255, 255, 0); break; // yellow
+            default: return zCOLOR(0, 255, 0); break; // green
+            case 100: return zCOLOR(255, 0, 255); break; // pink
+            }
+        });
     }
 
     int oCNpc::DoTakeVob_Hook(zCVob* vob) {
@@ -248,25 +292,17 @@ namespace GOTHIC_ENGINE {
 
         for (int i = gimme.GetNum() - 1; i >= 0; --i) {
             auto thing = gimme[i];
-            if ((thing->_GetClassDef() == oCItem::classDef)) {
-				DoPutInInventory(reinterpret_cast<oCItem*>(thing));
-            }
-            else if ((thing->_GetClassDef() == oCNpc::classDef)) {
-                auto npc = reinterpret_cast<oCNpc*>(thing);
-                if (npc->IsUnconscious() || npc->IsDead()) {
-                    auto& items = npc->inventory2.inventory;
-                    for (auto b = items.next; b; b = b->next) {
-                        oCItem* item = b->data;
-                        if (!item->HasFlag(ITM_CAT_ARMOR))
-                        {
-                            item = npc->RemoveFromInv(item, item->amount);
-							DoPutInInventory(item);
-							
-                        }
-                    }
+            if (!thing) continue;
+            collect_loot_targets(thing,
+                [this](oCItem* item) {
+                    DoPutInInventory(item);
+                },
+                [this](oCNpc* npc, oCItem* item) {
+                    item = npc->RemoveFromInv(item, item->amount);
+                    DoPutInInventory(item);
                 }
-            }
-		}
+            );
+        }
 
         /*
         // Create a copy of items to avoid modifying original
@@ -2200,7 +2236,7 @@ namespace GOTHIC_ENGINE {
 
 namespace GOTHIC_ENGINE {
     void Game_Loop() {
-        if (WasKeyJustPressed<KEY_L, KEY_LCONTROL, KEY_LSHIFT>()) {
+        if (WasKeyJustPressed<KEY_H, KEY_LCONTROL, KEY_LSHIFT>()) {
 			show_debug_rays = !!!!!show_debug_rays;
 		}
 
