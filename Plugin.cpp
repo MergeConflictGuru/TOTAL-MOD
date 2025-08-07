@@ -962,10 +962,9 @@ namespace GOTHIC_ENGINE {
             if (!changed) return;
             changed = false;
 
-            if (legendLines.GetNum() == 0) {
-                ClrPrintwin();
-                return;
-            }
+            ClrPrintwin();
+
+            if (legendLines.GetNum() == 0) return;
 
             constexpr int MARGIN = 12;
             SetFont("FONT_OLD_20_WHITE.TGA");
