@@ -785,6 +785,8 @@ namespace GOTHIC_ENGINE {
         // Register the command on the console
         zcon->Register(&cmdName, &cmdDesc);
     }
+
+    bool exited = false;
     
     /*
 		GOTTA CATCH 'EM ALL
@@ -844,28 +846,30 @@ namespace GOTHIC_ENGINE {
     //    }
     //};
 
-    class SafeViewFX {
+    template <typename ViewType,
+        typename = std::enable_if_t<std::is_base_of<zCViewFX, ViewType>::value>>
+    class SafeView {
     public:
         // Construct + init + open in one go
-        SafeViewFX(zCViewObject* parent,
+        SafeView(zCViewObject* parent,
             int unk,
             unsigned long x, unsigned long y,
             float w, float h,
             const zSTRING& tex)
         {
-            view = static_cast<zCViewFX*>(zCViewFX::_CreateNewInstance());
+            view = static_cast<ViewType*>(ViewType::_CreateNewInstance());
             assert(view && "Failed to create zCViewFX instance");
             view->Init(parent, unk, x, y, w, h, const_cast<zSTRING&>(tex));
             view->Open();
         }
 
         // Move‑only
-        SafeViewFX(SafeViewFX&& o) noexcept
+        SafeView(SafeView&& o) noexcept
             : view(o.view)
         {
             o.view = nullptr;
         }
-        SafeViewFX& operator=(SafeViewFX&& o) noexcept {
+        SafeView& operator=(SafeView&& o) noexcept {
             if (this != &o) {
                 cleanup();
                 view = o.view;
@@ -875,33 +879,35 @@ namespace GOTHIC_ENGINE {
         }
 
         // No copies
-        SafeViewFX(const SafeViewFX&) = delete;
-        SafeViewFX& operator=(const SafeViewFX&) = delete;
+        SafeView(const SafeView&) = delete;
+        SafeView& operator=(const SafeView&) = delete;
 
-        ~SafeViewFX() {
+        ~SafeView() {
             cleanup();
         }
 
         // Expose raw pointer if you need direct access
-        zCViewFX* get() const noexcept { return view; }
+        ViewType* get() const noexcept { return view; }
 
     private:
-        zCViewFX* view = nullptr;
+        ViewType* view = nullptr;
 
         void cleanup() {
+            if (exited) return;
             if (!view) return;
             view->Close();
             if (view->ViewParent)
                 view->ViewParent->RemoveChild(view);
             view->Release();
-            assert(view->refCtr <= 0 && "zCViewFX not fully released");
+			// stringify ViewType for debugging
+            assert(view->refCtr <= 0 && "SafeView not fully released");
             delete view;
             view = nullptr;
         }
     };
 
     struct MapIcon {
-        SafeViewFX view;
+        SafeView<zCViewFX> view;
         //ItemId     id;
 
         MapIcon() = delete;
@@ -912,7 +918,7 @@ namespace GOTHIC_ENGINE {
         {
         }
 
-        // Move semantics auto‑generated: SafeViewFX is moveable, ItemId too
+        // Move semantics auto‑generated: SafeView is moveable, ItemId too
         MapIcon(MapIcon&&) noexcept = default;
         MapIcon& operator=(MapIcon&&) noexcept = default;
 
@@ -920,6 +926,67 @@ namespace GOTHIC_ENGINE {
         MapIcon(const MapIcon&) = delete;
         MapIcon& operator=(const MapIcon&) = delete;
     };
+
+    class LegendView : public zCView {
+        zCArray<zSTRING> legendLines;
+        float hideTime = INFINITY;
+        bool changed = false;
+
+    public:
+        zCArray<zSTRING>& GetLines(float duration = INFINITY) {
+            hideTime = ztimer->totalTimeFloatSecs + duration;
+            changed = true;
+			return legendLines;
+        }
+
+        void SetText(const zSTRING& line, float duration = INFINITY) {
+            legendLines.DeleteList();
+            legendLines.InsertEnd(line);
+            hideTime = ztimer->totalTimeFloatSecs + duration;
+            changed = true;
+        }
+
+        LegendView()
+            : zCView(0, 0, 0x2000, 0x2000)
+        {
+        }
+
+        virtual void DrawItems() override {
+            zCView::DrawItems();
+
+            if (ztimer->totalTimeFloatSecs > hideTime) {
+                legendLines.DeleteList();
+                changed = true;
+            }
+
+            if (!changed) return;
+            changed = false;
+
+            if (legendLines.GetNum() == 0) {
+                ClrPrintwin();
+                return;
+            }
+
+            constexpr int MARGIN = 12;
+            SetFont("FONT_OLD_20_WHITE.TGA");
+
+            int width, height;
+            GetSize(width, height);
+
+            int fontHeight = FontY();
+            int y = MARGIN;
+
+            for (int i = 0; i < legendLines.GetNum(); ++i) {
+                int textWidth = FontSize(legendLines[i]);
+                int x = width - textWidth - MARGIN;
+                Print(x, y, legendLines[i]);
+                y += fontHeight;
+            }
+            BlitText();
+        }
+    };
+
+	LegendView* legend;
 
     struct MAP {
         static std::vector<MapIcon> mapIcons;
@@ -963,8 +1030,8 @@ namespace GOTHIC_ENGINE {
 
             float nx = (wp[0] - worldMinX) * invW;
             float nz = (wp[2] - worldMinZ) * invH;
-            int px = int(mapX + nx * mapW) - IconW / 2;
-            int py = int(mapY + nz * mapH) - IconH / 2;
+            int px = int(mapX + nx * mapW) - size2.X / 2;
+            int py = int(mapY + nz * mapH) - size2.Y / 2;
 
             zCPosition pos; pos.X = px; pos.Y = py;
 
@@ -1062,12 +1129,13 @@ namespace GOTHIC_ENGINE {
         zVEC3 wpPlaya = ogame->GetSelfPlayerVob()->GetPositionWorld();
         auto howHigh = wpPlaya[1];
 
-		size_t xpToGain = 0;
+		int xpToGain = 0;
         DiscoverNpcsInWorld();
         for (auto &it : discoveredNpcs) {
 			auto npc = it.first;
 			zVEC3 wp = it.second;
             if (npc == player) continue;
+            if (npc->name[0] == player->name[0]) continue;
             if (npc->IsDead()) continue;
             constexpr int XP_PER_VICTORY = 10;
             constexpr int AIV_VictoryXPGiven = 16;
@@ -1079,6 +1147,44 @@ namespace GOTHIC_ENGINE {
             map.AddIcon(wp, iconTex, size, 0x111111);
 			xpToGain += XP_PER_VICTORY * npc->level;
 		}
+
+        auto GetExpThreshold = [](int lvl) {
+            return 500 * (lvl * (lvl + 1)) / 2;
+        };
+
+        if (legend) {
+            int lvl = player->level;
+            int curXp = player->experience_points;
+            int maxXp = curXp + xpToGain;
+
+            auto& lines = legend->GetLines(10);
+            lines.DeleteList();
+
+			char line[1024];
+			snprintf(line, sizeof(line), "XP to gain: %d", xpToGain);
+            lines.InsertEnd(line);
+
+            int shown = 0;
+			int lastLevelShown = lvl;
+            while (true) {
+                int forLvl = lvl + 1;
+                int need = GetExpThreshold(forLvl);
+				bool lastOne = (need > maxXp);
+                if (lastOne) {
+                    forLvl = lvl;
+                    need = GetExpThreshold(forLvl); // highest attainable level
+                }
+                if ((shown < 3 || lastOne) && forLvl > lastLevelShown) {
+                    int beat = int(100.0 * (need - curXp) / xpToGain);
+					snprintf(line, sizeof(line), "beat %d%% -> level %d", beat, forLvl);
+                    lines.InsertEnd(line);
+                    ++shown;
+                    lastLevelShown = forLvl;
+                }
+				if (lastOne) break;
+				lvl = forLvl;
+            }
+        }
     }
 
     /*
@@ -1338,7 +1444,7 @@ namespace GOTHIC_ENGINE {
             DiscoverNpcsInWorld();
             for (auto& it : discoveredNpcs) {
                 auto npc = it.first;
-                if (npc == player) // Only process NPCs that are not the player
+                if (npc == player || npc->name[0] == player->name[0]) // Only process NPCs that are not the player
                     continue;
 
                 auto& items = npc->inventory2.inventory;
@@ -2210,6 +2316,7 @@ namespace GOTHIC_ENGINE {
     }
 
     void Game_Exit() {
+        exited = true;
     }
 
     template<int KEY>
@@ -2318,6 +2425,11 @@ namespace GOTHIC_ENGINE {
         }
         if (zinput->KeyPressed(KEY_DELETE) && zinput->KeyPressed(KEY_LCONTROL)) {
 			if (uiy <= 8191 - BUMP - uih) uiy += BUMP;
+        }
+
+        if (!legend && screen) {
+			legend = new LegendView;
+			screen->InsertItem(legend);
         }
     }
 
