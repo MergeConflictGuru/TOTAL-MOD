@@ -1085,13 +1085,14 @@ namespace GOTHIC_ENGINE {
 
     void DiscoverNpcsInWorld() {
         discoveredNpcs.clear();
-        DiscoverThingsUsingSymbols("C_NPC", [](int, zCPar_Symbol& sym) {
-            auto off = sym.GetInstanceAdr();
-            if (!off) return;
-            auto npc = ((zCObject*)off)->CastTo<oCNpc>();
-            if (npc == nullptr) return;
-            discoveredNpcs.emplace(npc, npc->GetPositionWorld());
-        });
+        auto world = ogame->GetGameWorld();
+    //    DiscoverThingsUsingSymbols("C_NPC", [](int, zCPar_Symbol& sym) {
+    //        auto off = sym.GetInstanceAdr();
+    //        if (!off) return;
+    //        auto npc = ((zCObject*)off)->CastTo<oCNpc>();
+    //        if (npc == nullptr) return;
+    //        discoveredNpcs.emplace(npc, npc->GetPositionWorld());
+    //    });
         auto SM = ogame->GetSpawnManager();
         if (SM) {
             auto& spawns = SM->spawnList;
@@ -1102,12 +1103,16 @@ namespace GOTHIC_ENGINE {
                 discoveredNpcs.emplace(npc, wp);
             }
         }
-        auto world = ogame->GetGameWorld();
-        if (world) {
-            find_vobs<oCNpc>(world, [](oCNpc& npc) {
-                discoveredNpcs.emplace(&npc, npc.GetPositionWorld());
-            });
-        }
+    //    
+    //    if (world) {
+    //        find_vobs<oCNpc>(world, [](oCNpc& npc) {
+    //            discoveredNpcs.emplace(&npc, npc.GetPositionWorld());
+    //        });
+    //    }
+		for (auto it = world->voblist_npcs->next; it; it = it->next) {
+            auto npc = it->data;
+            discoveredNpcs.emplace(npc, npc->GetPositionWorld());
+		}
     }
 
     void GottaMarkThemAll(oCViewDocumentMap& view) {
@@ -1139,7 +1144,7 @@ namespace GOTHIC_ENGINE {
             constexpr int XP_PER_VICTORY = 10;
             constexpr int AIV_VictoryXPGiven = 16;
             if (npc->aiscriptvars[AIV_VictoryXPGiven] == 1) continue;
-            if (npc->HasFlag(NPC_FLAG_IMMORTAL)) continue;
+            if (npc->HasFlag(NPC_FLAG_IMMORTAL) && npc->guild != NPC_GIL_DRAGON) continue;
 
             const float size = 3.0f * (npc->level + 18.33f) / (npc->level + 115.0f);
             zSTRING* iconTex = (wp[1] > howHigh) ? &aboveTex : &belowTex;
