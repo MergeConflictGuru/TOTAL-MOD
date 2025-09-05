@@ -121,7 +121,8 @@ namespace GOTHIC_ENGINE {
             auto otherVob = surrounding[i];
 			bool isItem = (otherVob->_GetClassDef() == oCItem::classDef);
 			bool isNpc = (otherVob->_GetClassDef() == oCNpc::classDef);
-            if (isItem || isNpc)
+			bool isChest = (otherVob->_GetClassDef() == oCMobContainer::classDef);
+            if (isItem || isNpc || isChest)
             {
                 auto otherWp = otherVob->GetPositionWorld();
                 if (otherWp.Distance(wp) <= range) {
@@ -133,8 +134,8 @@ namespace GOTHIC_ENGINE {
         return surrounding;
     }
 
-    template <typename ItemCallback, typename NpcItemCallback>
-    void collect_loot_targets(zCVob* thing, ItemCallback onItem, NpcItemCallback onNpcItem) {
+    template <typename ItemCallback, typename NpcItemCallback, typename ChestItemCallback>
+    void collect_loot_targets(zCVob* thing, ItemCallback onItem, NpcItemCallback onNpcItem, ChestItemCallback onCheshItem) {
         if (thing->_GetClassDef() == oCItem::classDef) {
             onItem(reinterpret_cast<oCItem*>(thing));
         }
@@ -145,10 +146,21 @@ namespace GOTHIC_ENGINE {
                 for (decltype(items.next) b = items.next, next; b; b = next) {
                     next = b->next;
                     oCItem* item = b->data;
-                    if (!item->HasFlag(ITM_CAT_ARMOR))
-                    {
+                    if (!item->HasFlag(ITM_CAT_ARMOR)) {
                         onNpcItem(npc, item);
                     }
+                }
+            }
+        }
+        else if (thing->_GetClassDef() == oCMobContainer::classDef) {
+            auto container = reinterpret_cast<oCMobContainer*>(thing);
+            if (!container->locked) {
+                auto& items = container->containList;
+
+                for (decltype(items.next) b = items.next, next; b; b = next) {
+                    next = b->next;
+                    oCItem* item = b->data;
+                    onCheshItem(container, item);
                 }
             }
         }
@@ -245,7 +257,10 @@ namespace GOTHIC_ENGINE {
                 },
                 [&](oCNpc* npc, oCItem* item) {
                     grab_pct = 100;
-                } // always true for NPC items
+                }, // always true for NPC items
+                [&](oCMobContainer* chest, oCItem* item) {
+                    grab_pct = 100;
+				}
             );
             if (!clear) grab_pct = -1;
             switch (grab_pct) {
@@ -300,6 +315,10 @@ namespace GOTHIC_ENGINE {
                 [this](oCNpc* npc, oCItem* item) {
                     item = npc->RemoveFromInv(item, item->amount);
                     DoPutInInventory(item);
+                },
+                [this](oCMobContainer* chest, oCItem* item) {
+					item = chest->Remove(item, item->amount);
+					DoPutInInventory(item);
                 }
             );
         }
@@ -380,6 +399,11 @@ namespace GOTHIC_ENGINE {
     }
 
     void StopDrinking() {
+        if (queuedDrink) {
+            auto player = ogame->GetSelfPlayerVob();
+            if (player) player->GetEM()->messageList.Remove(queuedDrink);
+			queuedDrink = nullptr;
+        }
         if (drinkingThis) {
             drinkingThis = 0;
             ztimer->factorMotion = 1;
@@ -1115,6 +1139,80 @@ namespace GOTHIC_ENGINE {
 		}
     }
 
+    int HowMuchXPNpcGives(oCNpc* npc) {
+        if (!npc || !player) return 0;
+        if (npc == player) return 0;
+        if (npc->name[0] == player->name[0]) return 0;
+        if (npc->IsDead()) return 0;
+        constexpr int AIV_VictoryXPGiven = 16;
+        if (npc->aiscriptvars[AIV_VictoryXPGiven] == 1) return 0;
+        if (npc->HasFlag(NPC_FLAG_IMMORTAL) && npc->guild != NPC_GIL_DRAGON) return 0;
+        constexpr int XP_PER_VICTORY = 10;
+        return XP_PER_VICTORY * npc->level;
+    }
+
+    int CumulativeThiefXP(int n)
+    {
+        constexpr int ThiefXP = 50;
+
+        if (!parser) return 0;
+
+        // Get symbols
+        auto symVictimCount = parser->GetSymbol("VictimCount");
+		auto symNextThreshold = parser->GetSymbol("VictimLevel"); // weirdly named in the script
+        auto symThiefLevel = parser->GetSymbol("ThiefLevel");
+
+        if (!symVictimCount || !symNextThreshold || !symThiefLevel)
+            return -1;
+
+        // Read current values using index 0
+        int VictimCount = 0, NextLevelThreshold = 0, ThiefLevel = 0;
+        symVictimCount->GetValue(VictimCount, 0);
+        symNextThreshold->GetValue(NextLevelThreshold, 0);
+        symThiefLevel->GetValue(ThiefLevel, 0);
+
+        // Simulate next n thefts
+        int totalXP = 0;
+        int vCount = VictimCount;
+        int nextThreshold = NextLevelThreshold;
+        int tLevel = ThiefLevel;
+
+        for (int i = 0; i < n; ++i)
+        {
+            vCount += 1;
+            if (nextThreshold == 0) nextThreshold = 2;
+
+            if (vCount >= nextThreshold)
+            {
+                tLevel += 1;
+                nextThreshold = vCount + tLevel;
+            }
+
+            totalXP += ThiefXP + (tLevel * 10);
+        }
+
+        return totalXP;
+    }
+
+    bool CanPickPocket(oCNpc* npc) {
+        if (!npc || !player) return 0;
+        if (npc == player) return 0;
+        if (npc->name[0] == player->name[0]) return 0;
+        if (npc->IsDead()) return 0;
+        constexpr int AIV_PlayerHasPickedMyPocket = 6;
+        if (npc->aiscriptvars[AIV_PlayerHasPickedMyPocket]) return 0;
+        auto man = ogame->GetInfoManager();
+        if (!man) return 0;
+		auto cnt = man->GetInfoCount(player, npc);
+        for (auto i = 0; i < cnt; ++i) {
+			auto info = man->GetInfo(player, npc, i);
+            if (info->name.Search(0, "PICKPOCKET", 1) >= 0) {
+                return 1;
+            }
+        }
+        return 0;
+	}
+
     void GottaMarkThemAll(oCViewDocumentMap& view) {
         MAP map(view);
         if (!map.ok) return;
@@ -1134,23 +1232,24 @@ namespace GOTHIC_ENGINE {
         auto howHigh = wpPlaya[1];
 
 		int xpToGain = 0;
+		int ppVictims = 0;
         DiscoverNpcsInWorld();
         for (auto &it : discoveredNpcs) {
 			auto npc = it.first;
 			zVEC3 wp = it.second;
-            if (npc == player) continue;
-            if (npc->name[0] == player->name[0]) continue;
-            if (npc->IsDead()) continue;
-            constexpr int XP_PER_VICTORY = 10;
-            constexpr int AIV_VictoryXPGiven = 16;
-            if (npc->aiscriptvars[AIV_VictoryXPGiven] == 1) continue;
-            if (npc->HasFlag(NPC_FLAG_IMMORTAL) && npc->guild != NPC_GIL_DRAGON) continue;
+			int xp = HowMuchXPNpcGives(npc);
+			bool engoughXp = (xp > 10);
+			bool canPick = CanPickPocket(npc);
+			if (!canPick && !engoughXp) continue;
 
             const float size = 3.0f * (npc->level + 18.33f) / (npc->level + 115.0f);
             zSTRING* iconTex = (wp[1] > howHigh) ? &aboveTex : &belowTex;
-            map.AddIcon(wp, iconTex, size, 0x111111);
-			xpToGain += XP_PER_VICTORY * npc->level;
+            map.AddIcon(wp, iconTex, size, !canPick ? 0x111111 : 0x554433);
+            xpToGain += xp;
+            ppVictims += canPick;
 		}
+
+		xpToGain += CumulativeThiefXP(ppVictims);
 
         auto GetExpThreshold = [](int lvl) {
             return 500 * (lvl * (lvl + 1)) / 2;
@@ -1822,6 +1921,14 @@ namespace GOTHIC_ENGINE {
             return wchar_to_str(insertCodes.view(0, *res)).c_str();
         };
 
+        auto worldToMap(const zVEC3& wp) {
+            float invW = 1.0f / ww;
+            float invH = 1.0f / wh;
+            float u = (wp[0] - wx) * invW;
+            float v = (wp[2] - wz) * invH;
+            return std::make_pair(u, v);
+		};
+
         auto markTreasure(zSTRING& findName) {
             for (auto& x : resultsByItemName)
                 x.second.foundCount = 0;
@@ -1842,13 +1949,15 @@ namespace GOTHIC_ENGINE {
                 resultsByHolder.emplace(thing.holder, thing);
             }
 
-            std::vector<std::pair<float, float>> markers;
+            std::vector<Marker> markers;
             for (auto& thing : fond) {
-                float invW = 1.0f / ww;
-                float invH = 1.0f / wh;
-                float u = (thing.position[0] - wx) * invW;
-                float v = (thing.position[2] - wz) * invH;
-                markers.emplace_back(u, v);
+				auto uv = worldToMap(thing.position);
+                markers.emplace_back(uv.first, uv.second, 0x00ff0000);
+            }
+            if (player) {
+				auto pos = player->GetPositionWorld();
+                auto uv = worldToMap(pos);
+				markers.emplace_back(uv.first, uv.second, 0x00ffffff);
             }
 
             return markers;
@@ -2101,10 +2210,12 @@ namespace GOTHIC_ENGINE {
     void xr_Detoured();
     void xr_FakeExit1();
     void xr_FakeExit2();
+    void xr_PrintJump();
 
     HOOK xr_real_get_focusHook AS(0x006C35A0, &xr_Detoured);
     HOOK xr_real_exit_1Hook AS(0x006C3844, &xr_FakeExit1);
     HOOK xr_real_exit_2Hook AS(0x006C3BB2, &xr_FakeExit2);
+	HOOK xr_real_printHook AS(0x006C3B81, &xr_PrintJump);
 
     LPVOID xr_real_get_focus{ HOOK_RAW_ORIG(xr_real_get_focusHook) };
     LPVOID xr_real_exit_1{ HOOK_RAW_ORIG(xr_real_exit_1Hook) };
@@ -2122,6 +2233,39 @@ namespace GOTHIC_ENGINE {
         int numAlloc = -1;
         int num = -1;
     } xr_vobs;
+	uint8_t xr_printing_orig_text = 1;
+
+    __declspec(naked) void xr_PrintJump()
+    {
+        __asm
+        {
+            push 0x006C3B86 		   // instr after screen->Print(...)
+            jmp zCView::xr_Print_Hook
+        }
+    }
+
+    void zCView::xr_Print_Hook(int x, int y, zSTRING const& str) {
+        zCOLOR prevColor = fontColor;
+        if (xray_enabled) {
+            if (!xr_printing_orig_text) fontColor = zCOLOR(255, 244, 111);
+            else {
+                auto npc = player->GetFocusNpc();
+                if (npc) {
+                    zSTRING str2 = str;
+                    bool canBeat = HowMuchXPNpcGives(npc) > 0;
+					bool canPP = CanPickPocket(npc);
+                    if (canBeat || canPP) str2 += " ";
+					if (canBeat) str2 += "!";
+					if (canPP) str2 += "$";
+                    Print(x, y, str2);
+                    fontColor = prevColor;
+                    return;
+                }
+            }
+        }
+        Print(x, y, str);
+		fontColor = prevColor;
+    }
 
     oCVob* __fastcall xr_filter(oCVob* me) {
         if (!item_tool.isVisible()) return me;
@@ -2153,6 +2297,7 @@ namespace GOTHIC_ENGINE {
             jmp CONTINUE_LOOP
 
         INITIALIZE_LOOP :                // back that shit up, get vob array
+            mov xr_printing_orig_text, 0
             mov ds : 0x008B21E8, 0        // disable focus bar
             mov xr_ctx.ebx, ebx
             mov xr_ctx.esi, esi
@@ -2244,6 +2389,7 @@ namespace GOTHIC_ENGINE {
             mov ds : 0x008B21E8, 1        // enable focs bar
 
             USE_ORIGINAL_FOCUS :             // ecx must be <oCNpc* player>
+            mov xr_printing_orig_text, 1
             push xr_real_get_focus
             ret
         }
@@ -2347,6 +2493,10 @@ namespace GOTHIC_ENGINE {
 
 namespace GOTHIC_ENGINE {
     void Game_Loop() {
+        if (WasKeyJustPressed<KEY_F4, KEY_LALT>()) {
+			TerminateProcess(GetCurrentProcess(), 0);
+        }
+
         if (WasKeyJustPressed<KEY_H, KEY_LCONTROL, KEY_LSHIFT>()) {
 			show_debug_rays = !!!!!show_debug_rays;
 		}

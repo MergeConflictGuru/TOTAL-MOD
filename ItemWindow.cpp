@@ -9,6 +9,7 @@
 // Add at top for AlphaBlend
 #include <wingdi.h>
 #include <cmath> // For std::round
+#include <algorithm>
 
 #pragma comment(lib, "msimg32.lib")
 #pragma comment(lib, "comctl32.lib")
@@ -254,8 +255,12 @@ void ItemWindow::ClearListView() {
     SendMessageW(m_hResultListView, LVM_DELETEALLITEMS, 0, 0);
 }
 
-void ItemWindow::UpdateMarkers(std::vector<std::pair<float, float>>&& markers) {
+void ItemWindow::UpdateMarkers(std::vector<Marker>&& markers) {
     m_markers = std::move(markers);
+    std::sort(m_markers.begin(), m_markers.end(),
+        [](const Marker& a, const Marker& b) {
+            return a.color.value < b.color.value;
+        });
     InvalidateRect(m_hMainWindow, &m_imgRect, TRUE);
 }
 
@@ -593,22 +598,38 @@ LRESULT ItemWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 bf
             );
 
-            // Draw markers on top
-            if (!m_markers.empty()) {
-                HPEN hPen = CreatePen(PS_SOLID, 2, RGB(255, 0, 0));
-                HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+            HPEN hPen = nullptr;
+            HPEN hOldPen = nullptr;
+            uint32_t currentColor = 0;
 
-                for (const auto& marker : m_markers) {
-                    POINT pt = UVToScreen(marker.first, marker.second);
+            for (const auto& marker : m_markers) {
+                // If color changed, create a new pen
+                if (!hPen || marker.color.value != currentColor) {
+                    if (hPen) {
+                        SelectObject(hdc, hOldPen);
+                        DeleteObject(hPen);
+                    }
 
-                    // Draw a cross marker
-                    int size = 5;
-                    MoveToEx(hdc, pt.x - size, pt.y, nullptr);
-                    LineTo(hdc, pt.x + size, pt.y);
-                    MoveToEx(hdc, pt.x, pt.y - size, nullptr);
-                    LineTo(hdc, pt.x, pt.y + size);
+                    currentColor = marker.color.value;
+                    COLORREF clr = RGB(marker.color.argb.r,
+                        marker.color.argb.g,
+                        marker.color.argb.b);
+                    hPen = CreatePen(PS_SOLID, 2, clr);
+                    hOldPen = (HPEN)SelectObject(hdc, hPen);
                 }
 
+                POINT pt = UVToScreen(marker.u, marker.v);
+
+                // Draw cross
+                int size = 5;
+                MoveToEx(hdc, pt.x - size, pt.y, nullptr);
+                LineTo(hdc, pt.x + size, pt.y);
+                MoveToEx(hdc, pt.x, pt.y - size, nullptr);
+                LineTo(hdc, pt.x, pt.y + size);
+            }
+
+            // Clean up the last pen
+            if (hPen) {
                 SelectObject(hdc, hOldPen);
                 DeleteObject(hPen);
             }

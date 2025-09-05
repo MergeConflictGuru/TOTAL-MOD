@@ -2,3 +2,5 @@
 
 // User API for zCView
 // Add your methods here
+
+void xr_Print_Hook(int, int, Gothic_II_Addon::zSTRING const&);

@@ -7,6 +7,25 @@
 #include <string>
 #include <functional>
 
+struct Marker {
+    float u;
+    float v;
+
+    union {
+        uint32_t value; // Full ARGB as 0xAARRGGBB
+        struct {
+            uint8_t b : 8;
+            uint8_t g : 8;
+            uint8_t r : 8;
+            uint8_t a : 8;
+        } argb;
+    } color;
+
+    Marker(float u, float v, uint32_t argb)
+        : u(u), v(v) {
+        color.value = argb;
+    }
+};
 class ItemWindow {
 public:
     std::function<void(const std::wstring&)> onSearchChange;
@@ -28,7 +47,7 @@ public:
     inline bool IsReady() { return m_initialized; }
     void        ShowImage(const unsigned char* raw_bgra, int w, int h);
     void ShowImage(std::vector<uint8_t>&& raw_bgra, int w, int h);
-    void UpdateMarkers(std::vector<std::pair<float, float>>&&);
+    void UpdateMarkers(std::vector<Marker>&&);
     void SetWindowTitle(const std::wstring& title);
     void TriggerRefresh();
     inline bool IsShown() { return IsWindowVisible(m_hMainWindow) && !IsIconic(m_hMainWindow) ; }
@@ -47,7 +66,7 @@ private:
     std::vector<std::vector<std::wstring>> m_lastRows;
     HBITMAP m_hBitmap = nullptr; // For transparent image rendering
     DWORD m_lastOpenTime = 0;
-    std::vector<std::pair<float, float>> m_markers;
+    std::vector<Marker> m_markers;
 
     POINT UVToScreen(float u, float v);
     std::pair<float, float> ScreenToUV(int x, int y);
