@@ -32,7 +32,7 @@ public:
     std::function<void(int /*row*/, int /*col*/)> onRowActivate;  // Renamed from onRowClick
     std::function<void(int /*row*/, int /*col*/, POINT /*screenPt*/)> onRowRightClick;
     std::function<void(int /*row*/)> onSelectionChange;  // New for selection changes
-    std::function<void(float /*u*/, float /*v*/)> onImageDoubleClick;
+    std::function<void(float /*u*/, float /*v*/, bool /*rightClick*/)> onImageDoubleClick;
     std::function<void()> anyEvt;
     std::function<void(bool)> onFocusChange;
 

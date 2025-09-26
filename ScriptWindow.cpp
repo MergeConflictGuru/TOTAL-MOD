@@ -12,8 +12,8 @@ ScriptWindow::ScriptWindow()
 
 ScriptWindow::~ScriptWindow() {
     if (m_hWnd) DestroyWindow(m_hWnd);
-    if (m_hEdit) RemoveEscSubclass(m_hEdit);
-    if (m_hButton) RemoveEscSubclass(m_hButton);
+    if (m_hEdit) RemoveHotkeySubclass(m_hEdit);
+    if (m_hButton) RemoveHotkeySubclass(m_hButton);
 }
 
 bool ScriptWindow::Open() {
@@ -58,20 +58,30 @@ bool ScriptWindow::RegisterWindowClass() {
     return RegisterClassExW(&wc) != FALSE;
 }
 
-void ScriptWindow::ApplyEscSubclass(HWND child) {
-    SetWindowSubclass(child, EscSubclassProc, ESC_SUBCLASS_ID, (DWORD_PTR)this);
+void ScriptWindow::ApplyHotkeySubclass(HWND child) {
+    SetWindowSubclass(child, HotkeySubclassProc, ESC_SUBCLASS_ID, (DWORD_PTR)this);
 }
 
-void ScriptWindow::RemoveEscSubclass(HWND child) {
-    RemoveWindowSubclass(child, EscSubclassProc, ESC_SUBCLASS_ID);
+void ScriptWindow::RemoveHotkeySubclass(HWND child) {
+    RemoveWindowSubclass(child, HotkeySubclassProc, ESC_SUBCLASS_ID);
 }
 
-LRESULT CALLBACK ScriptWindow::EscSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
+LRESULT CALLBACK ScriptWindow::HotkeySubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
     UINT_PTR id, DWORD_PTR ref) {
     ScriptWindow* pThis = reinterpret_cast<ScriptWindow*>(ref);
-    if (msg == WM_KEYDOWN && wp == VK_ESCAPE) {
-        pThis->Hide();
-        return 0;
+    if (msg == WM_KEYDOWN) {
+        switch (wp) {
+        case 'N':
+            if ((GetKeyState(VK_CONTROL) & 0x8000)) {
+                SetWindowTextW(pThis->m_hEdit, defaultText);
+                SendMessageW(pThis->m_hEdit, EM_SETSEL, 0, -1);
+                return 0;
+            }
+            break;
+        case VK_ESCAPE:
+            pThis->Hide();
+            return 0;
+        }
     }
     return DefSubclassProc(hwnd, msg, wp, lp);
 }
@@ -96,7 +106,7 @@ LRESULT ScriptWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         m_hEdit = CreateWindowW(L"EDIT", L"",
             WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL,
             10, 10, 560, 300, m_hWnd, (HMENU)ID_EDIT, m_hInst, nullptr);
-        SetWindowTextW(m_hEdit, L"func int main()\r\n{\r\n\t//put your code here\r\n\treturn 0;\r\n};");
+        SetWindowTextW(m_hEdit, defaultText);
         // Button
         m_hButton = CreateWindowW(L"BUTTON", L"Execute",
             WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
@@ -106,8 +116,8 @@ LRESULT ScriptWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             WS_CHILD | WS_VISIBLE,
             120, 320, 450, 30, m_hWnd, nullptr, m_hInst, nullptr);
         // Subclass for Escape
-        ApplyEscSubclass(m_hEdit);
-        ApplyEscSubclass(m_hButton);
+        ApplyHotkeySubclass(m_hEdit);
+        ApplyHotkeySubclass(m_hButton);
         return 0;
     }
     case WM_ACTIVATE: {
@@ -148,8 +158,8 @@ LRESULT ScriptWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         Hide();
         return 0;
     case WM_DESTROY:
-        RemoveEscSubclass(m_hEdit);
-        RemoveEscSubclass(m_hButton);
+        RemoveHotkeySubclass(m_hEdit);
+        RemoveHotkeySubclass(m_hButton);
         return 0;
     }
     return DefWindowProcW(m_hWnd, msg, wParam, lParam);

@@ -34,14 +34,15 @@ private:
     static constexpr int ID_EDIT = 200;
     static constexpr int ID_BUTTON = 201;
     static constexpr UINT_PTR ESC_SUBCLASS_ID = 1;
+    static constexpr wchar_t defaultText[] = L"func int main()\r\n{\r\n\t//put your code here\r\n\treturn 0;\r\n};";
 
     bool RegisterWindowClass();
     bool InitWindow();
-    void ApplyEscSubclass(HWND child);
-    void RemoveEscSubclass(HWND child);
+    void ApplyHotkeySubclass(HWND child);
+    void RemoveHotkeySubclass(HWND child);
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-    static LRESULT CALLBACK EscSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
+    static LRESULT CALLBACK HotkeySubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
         UINT_PTR id, DWORD_PTR ref);
 };
 

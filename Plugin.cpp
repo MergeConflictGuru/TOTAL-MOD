@@ -1232,24 +1232,37 @@ namespace GOTHIC_ENGINE {
         auto howHigh = wpPlaya[1];
 
 		int xpToGain = 0;
+
 		int ppVictims = 0;
+        std::vector<bool> pickPocketTargets;
+
         DiscoverNpcsInWorld();
+        for (auto& it : discoveredNpcs) {
+            auto npc = it.first;
+            bool canPick = CanPickPocket(npc);
+			pickPocketTargets.push_back(canPick);
+            ppVictims += canPick;
+        }
+
+        int totalPickPocketXP = CumulativeThiefXP(ppVictims);
+		float avgPickPocketXP = ppVictims > 0 ? (float)totalPickPocketXP / ppVictims : 0;
+
+		size_t i = 0;
         for (auto &it : discoveredNpcs) {
 			auto npc = it.first;
 			zVEC3 wp = it.second;
-			int xp = HowMuchXPNpcGives(npc);
-			bool engoughXp = (xp > 10);
-			bool canPick = CanPickPocket(npc);
-			if (!canPick && !engoughXp) continue;
+			int beat_xp = HowMuchXPNpcGives(npc);
+            bool canPick = pickPocketTargets[i++];
+			float est_xp = beat_xp + (canPick ? avgPickPocketXP : 0.0f);
+			if (est_xp <= 10) continue;
 
-            const float size = 3.0f * (npc->level + 18.33f) / (npc->level + 115.0f);
+            const float size = 3.0f * (0.1f * est_xp + 18.33f) / (0.1f * est_xp + 115.0f);
             zSTRING* iconTex = (wp[1] > howHigh) ? &aboveTex : &belowTex;
             map.AddIcon(wp, iconTex, size, !canPick ? 0x111111 : 0x554433);
-            xpToGain += xp;
-            ppVictims += canPick;
+            xpToGain += beat_xp;
 		}
 
-		xpToGain += CumulativeThiefXP(ppVictims);
+		xpToGain += totalPickPocketXP;
 
         auto GetExpThreshold = [](int lvl) {
             return 500 * (lvl * (lvl + 1)) / 2;
@@ -2035,12 +2048,12 @@ namespace GOTHIC_ENGINE {
                     RefreshNow();
                     };
 
-                w.onImageDoubleClick = [this](float u, float v) {
+                w.onImageDoubleClick = [this](float u, float v, bool rightClick) {
                     auto world = ogame->GetGameWorld();
                     auto worldbb = world->bspTree.bspRoot->bbox3D;
                     zVEC3 wpos;
                     wpos[0] = wx + u * ww;
-                    wpos[1] = worldbb.maxs[1];
+                    wpos[1] = rightClick ? worldbb.maxs[1] : worldbb.mins[1];
                     wpos[2] = wz + v * wh;
 
                     auto& wayNet = *world->wayNet;
@@ -2450,6 +2463,31 @@ namespace GOTHIC_ENGINE {
 
     HOOK orig_sysEvent_Focus AS(0x505642, &sysEvent_NoFocus);
 
+    /*
+        TELEPORTER
+    */
+
+    void ChangeLevel(zSTRING const& targetLevel, zSTRING const& startPoint = "")
+    {
+        // If any protected spell (47..58) is active, end it and abort.
+        for (int id = 47; id <= 58; ++id) {
+            if (oCSpell* s = player->IsSpellActive(id)) {
+                s->EndTimedEffect();
+                return;
+            }
+        }
+
+        // If spellbook is drawn (weapon mode 7), kill selected spell and unequip.
+        if (player->GetWeaponMode() == NPC_WEAPON_MAG) {
+            if (oCMag_Book* book = player->GetSpellBook())
+                book->KillSelectedSpell();
+            player->EV_ForceRemoveWeapon(false);
+        }
+
+        // Clear all active spells, then change level.
+        player->KillActiveSpells();
+        ogame->TriggerChangeLevel(targetLevel, startPoint);
+    }
 
     /*
         COMMON
@@ -2515,6 +2553,26 @@ namespace GOTHIC_ENGINE {
 
         if (WasKeyJustPressed<KEY_F, KEY_LCONTROL>()) {
             player_stats.ShowPlayerStatsWindow();
+        }
+
+        // --- Level port hotkeys ---------------------------------------------
+        // Ctrl+Shift+1 → NewWorld
+        if (WasKeyJustPressed<KEY_F1, KEY_LCONTROL, KEY_LSHIFT>()) {
+            ChangeLevel("NewWorld\\NewWorld.zen");
+        }
+
+        // Ctrl+Shift+2 → OldWorld
+        if (WasKeyJustPressed<KEY_F2, KEY_LCONTROL, KEY_LSHIFT>()) {
+            ChangeLevel("OldWorld\\OldWorld.zen");
+        }
+
+        // Ctrl+Shift+3 → AddonWorld
+        if (WasKeyJustPressed<KEY_F3, KEY_LCONTROL, KEY_LSHIFT>()) {
+            ChangeLevel("Addon\\AddonWorld.zen");
+        }
+
+        if (WasKeyJustPressed<KEY_F4, KEY_LCONTROL, KEY_LSHIFT>()) {
+            ChangeLevel("NewWorld\\DragonIsland.zen");
         }
 
         if (show_debug_rays) showLootRays();

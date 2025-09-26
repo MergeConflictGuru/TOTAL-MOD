@@ -479,7 +479,9 @@ LRESULT ItemWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         break;
     }
 
-    case WM_LBUTTONDBLCLK: {
+    case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDBLCLK:
+    {
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
 
@@ -487,7 +489,7 @@ LRESULT ItemWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         POINT pt = { x, y };
         if (PtInRect(&m_imgRect, pt)) {
             auto uv = ScreenToUV(x, y);
-            if (onImageDoubleClick) onImageDoubleClick(uv.first, uv.second);
+            if (onImageDoubleClick) onImageDoubleClick(uv.first, uv.second, wParam == WM_RBUTTONDBLCLK);
         }
         return 0;
     }
